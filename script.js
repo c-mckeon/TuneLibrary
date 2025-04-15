@@ -94,7 +94,7 @@ var firebaseConfig = {
             tuneItem.innerHTML = `
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span class="tune-name">${tune.name}</span>
-                <span class="tune-knowledge">Knowledge: ${tune.knowledge}</span>
+                <!-- <span class="tune-knowledge">Knowledge: ${tune.knowledge}</span> -->
               </div>
             `;
 
