@@ -1,0 +1,103 @@
+/* Style for toggle buttons */
+.toggle-buttons {
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+  }
+  .toggle-buttons button {
+    width: 100px;
+    margin: 0 10px;
+    padding: 10px;
+    font-size: 16px;
+  }
+  .toggle-buttons .active {
+    background-color: #4285F4;
+    color: white;
+  }
+  
+  /* Style for input form and list area */
+  .input-box, .tune-list, .tune-details, .sorting {
+    margin: 20px auto;
+    max-width: 600px;
+    text-align: center;
+  }
+  .input-box input {
+    padding: 5px;
+    font-size: 14px;
+    margin-right: 5px;
+  }
+  .input-box button {
+    padding: 5px 10px;
+    font-size: 14px;
+  }
+
+  .tune-list > div {
+    padding: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid #ccc; /* Add a bottom border */
+  }
+  
+  
+  .tune-list div:hover {
+    background-color: #f0f0f0;
+  }
+  .hidden {
+    display: none !important;
+  }
+  
+
+  .tune-details {
+    margin-top: 20px;
+    text-align: center;
+    min-height: 800px; /* or use min-height if you want it flexible */
+  }
+  
+  #detailsDisplay {
+    white-space: pre-wrap;
+    padding: 10px;
+    border: 1px solid #ccc;
+    width: 95%;
+    max-width: 700px;
+    margin: 10px auto;
+    text-align: left;
+    background-color: #f9f9f9;
+    min-height: 500px;
+  }
+  
+  textarea#tuneDetails {
+    width: 95%;
+    max-width: 700px;
+    margin: 10px auto;
+    display: block;
+    min-height: 800px; /* or use min-height if you want it flexible */
+  }
+  
+
+  p {
+    margin-top: 1.5em; /* Adds moderate space between paragraphs */
+    margin-bottom: 1.5em; /* Space below the paragraph */
+    line-height: 1.5; /* For better readability */
+}
+
+
+#detailsDisplay {
+    overflow-y: auto;
+    scroll-behavior: smooth;
+    max-height: 500px; /* or whatever height you want */
+  }
+  
+
+
+  #chordDiagramsContainer {
+    display: flex;
+    flex-wrap: wrap; /* Allow the images to wrap to the next line */
+    gap: 10px; /* Space between each image */
+    justify-content: center; /* Center the images */
+  }
+  
+  .chord-diagram {
+    width: 100px; /* Adjust the size as needed */
+    height: auto;
+    object-fit: contain; /* Ensure the images fit within their container */
+  }
+  
