@@ -1,189 +1,287 @@
 // Firebase config (v8 style)
 var firebaseConfig = {
-    apiKey: "AIzaSyAZt1pHQvfBNm2goItl5pFk3h5SqE5rOg",
-    authDomain: "tunes-96bdd.firebaseapp.com",
-    databaseURL: "https://tunes-96bdd-default-rtdb.europe-west1.firebasedatabase.app",
-    projectId: "tunes-96bdd",
-    storageBucket: "tunes-96bdd.firebasestorage.app",
-    messagingSenderId: "806822088652",
-    appId: "1:806822088652:web:9cbff3464478b5c48b1769"
-  };
-  firebase.initializeApp(firebaseConfig);
-  var database = firebase.database();
-  
-  var currentMode = "guitar";
-  var selectedTuneKey = null;
-  
-  var guitarBtn = document.getElementById("guitarBtn");
-  var mandolinBtn = document.getElementById("mandolinBtn");
-  var tuneNameInput = document.getElementById("tuneName");
-  var knowledgeInput = document.getElementById("knowledge");
-  var priorityInput = document.getElementById("priority");
-  var saveTuneBtn = document.getElementById("saveTune");
-  var tuneListDiv = document.getElementById("tuneList");
-  var sortKnowledgeBtn = document.getElementById("sortKnowledge");
-  var sortPriorityBtn = document.getElementById("sortPriority");
-  var tuneDetailsContainer = document.getElementById("tuneDetailsContainer");
-  var tuneDetailsText = document.getElementById("tuneDetails");
-  var detailsDisplay = document.getElementById("detailsDisplay");
-  var saveDetailsBtn = document.getElementById("saveDetails");
-  var editDetailsBtn = document.getElementById("editDetailsBtn");
-  
-  guitarBtn.addEventListener("click", function () {
-    currentMode = "guitar";
-    guitarBtn.classList.add("active");
-    mandolinBtn.classList.remove("active");
-    selectedTuneKey = null;
-    tuneDetailsText.value = "";
-    detailsDisplay.textContent = "";
-    tuneDetailsContainer.classList.add("hidden");
-    loadTunes();
-  });
-  
-  mandolinBtn.addEventListener("click", function () {
-    currentMode = "mandolin";
-    mandolinBtn.classList.add("active");
-    guitarBtn.classList.remove("active");
-    selectedTuneKey = null;
-    tuneDetailsText.value = "";
-    detailsDisplay.textContent = "";
-    tuneDetailsContainer.classList.add("hidden");
-    loadTunes();
-  });
-  
-  saveTuneBtn.addEventListener("click", function () {
-    var tuneName = tuneNameInput.value.trim();
-    var knowledge = parseInt(knowledgeInput.value);
-    // var priority = parseInt(priorityInput.value);
-  
-  
-    var newTune = {
-      name: tuneName,
-      knowledge: knowledge,
-      details: "",
-      mode: currentMode
-    };
-  
-    var tunesRef = database.ref("tunes/" + currentMode);
-    tunesRef.push(newTune, function (error) {
-      if (error) {
-        console.error("Error saving tune:", error);
-      } else {
-        tuneNameInput.value = "";
-        knowledgeInput.value = "";
-      }
-    });
-  });
-  
-  function loadTunes() {
-    var tunesRef = database.ref("tunes/" + currentMode);
-    tunesRef.on("value", function (snapshot) {
+  apiKey: "AIzaSyAZt1pHQvfBNm2goItl5pFk3h5SqE5rOg",
+  authDomain: "tunes-96bdd.firebaseapp.com",
+  databaseURL: "https://tunes-96bdd-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "tunes-96bdd",
+  storageBucket: "tunes-96bdd.firebasestorage.app",
+  messagingSenderId: "806822088652",
+  appId: "1:806822088652:web:9cbff3464478b5c48b1769"
+};
+firebase.initializeApp(firebaseConfig);
+var database = firebase.database();
+
+var currentMode = "guitar";
+var selectedTuneKey = null;
+var tuneData = {}; // Store fetched tune details for editing
+
+// DOM Elements
+var guitarBtn = document.getElementById("guitarBtn");
+var mandolinBtn = document.getElementById("mandolinBtn");
+var tuneNameInput = document.getElementById("tuneName");
+var knowledgeInput = document.getElementById("knowledge");
+var saveTuneBtn = document.getElementById("saveTune");
+var tuneListDiv = document.getElementById("tuneList");
+var tuneDetailsContainer = document.getElementById("tuneDetailsContainer");
+var tuneDetailsText = document.getElementById("tuneDetails");
+var detailsDisplay = document.getElementById("detailsDisplay");
+var saveDetailsBtn = document.getElementById("saveDetails");
+var editDetailsBtn = document.getElementById("editDetailsBtn");
+var chordInput = document.getElementById("chordInput");
+const nameInput = document.getElementById("nameInput");
+const linkInput = document.getElementById("linkInput");
+const keyInput = document.getElementById("keyInput");
+const typeInput = document.getElementById("typeInput");
+const editKnowledgeInput = document.getElementById("knowledgeInput");
+var clickLinkBtn = document.getElementById("clicklink");
+const youtubePlayerContainer = document.getElementById("youtubePlayerContainer");
+
+
+
+// Mode toggle
+function loadTunes() {
+  var tunesRef = database.ref("tunes/" + currentMode);
+  tunesRef.on("value", function (snapshot) {
       var tunes = snapshot.val();
       renderTuneList(tunes);
-    });
-  }
-  
-  function renderTuneList(tunes) {
-    tuneListDiv.innerHTML = "";
-    if (tunes) {
-        Object.keys(tunes).forEach(function (key) {
-            var tune = tunes[key];
-            var tuneItem = document.createElement("div");
-
-            // Use a flex container to align the two pieces of text:
-            tuneItem.innerHTML = `
-              <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span class="tune-name">${tune.name}</span>
-                <!-- <span class="tune-knowledge">Knowledge: ${tune.knowledge}</span> -->
-              </div>
-            `;
-
-            tuneItem.setAttribute("data-key", key);
-            tuneItem.addEventListener("click", function () {
-                selectedTuneKey = key;
-                tuneDetailsText.value = tune.details || "";
-                detailsDisplay.textContent = tune.details || "";
-                tuneDetailsText.classList.add("hidden");
-                detailsDisplay.classList.remove("hidden");
-                editDetailsBtn.classList.remove("hidden");
-                saveDetailsBtn.classList.add("hidden");
-                tuneDetailsContainer.classList.remove("hidden");
-
-                // Clear chord diagrams container BEFORE loading new chords
-                const chordDiagramsContainer = document.getElementById("chordDiagramsContainer");
-                if (chordDiagramsContainer) {
-                    chordDiagramsContainer.innerHTML = "";
-                    chordDiagramsContainer.classList.remove("hidden");
-                }
-
-                // Fetch chords data from Firebase and show chord diagrams
-                var tuneRef = database.ref("tunes/" + currentMode + "/" + selectedTuneKey);
-                tuneRef.once("value", function(snapshot) {
-                    var tuneData = snapshot.val();
-
-                    // Show chord diagrams if chords exist
-                    if (tuneData && tuneData.chords) {
-                        showChordDiagrams(tuneData.chords);
-                    }
-
-                    // Initially hide the chord input field
-                    const chordInput = document.getElementById("chordInput");
-                    if (chordInput) {
-                        chordInput.value = tuneData && tuneData.chords ? tuneData.chords : "";
-                        chordInput.classList.add("hidden"); // Keep it hidden initially
-                    }
-                });
-            });
-
-            tuneListDiv.appendChild(tuneItem);
-        });
-    } else {
-        tuneListDiv.textContent = "No tunes found.";
-    }
+  });
 }
 
+guitarBtn.addEventListener("click", function () {
+  currentMode = "guitar";
+  guitarBtn.classList.add("active");
+  mandolinBtn.classList.remove("active");
+  selectedTuneKey = null;
+  tuneDetailsContainer.classList.add("hidden");
+  loadTunes();
+});
 
+mandolinBtn.addEventListener("click", function () {
+  currentMode = "mandolin";
+  mandolinBtn.classList.add("active");
+  guitarBtn.classList.remove("active");
+  selectedTuneKey = null;
+  tuneDetailsContainer.classList.add("hidden");
+  loadTunes();
+});
 
-  
-  // Show the edit fields when the 'Edit' button is clicked
-editDetailsBtn.addEventListener("click", function () {
-    tuneDetailsText.classList.remove("hidden"); // Show the tune details text area
-    chordInput.classList.remove("hidden"); // Show the chord input box
-    detailsDisplay.classList.add("hidden"); // Hide the details display
-    editDetailsBtn.classList.add("hidden"); // Hide the edit button
-    saveDetailsBtn.classList.remove("hidden"); // Show the save button
+// Save a new tune
+saveTuneBtn.addEventListener("click", function () {
+  var tuneName = tuneNameInput.value.trim();
+  var newTune = {
+      name: tuneName,
+      details: "",
+      mode: currentMode
+  };
+  database.ref("tunes/" + currentMode).push(newTune, function (error) {
+      if (error) {
+          console.error("Error saving tune:", error);
+      } else {
+          tuneNameInput.value = "";
+          knowledgeInput.value = "";
+      }
   });
-  
-  // Save the tune details and chords when the 'Save' button is clicked
-  saveDetailsBtn.addEventListener("click", function () {
-    var details = tuneDetailsText.value;
-    var chords = chordInput.value; // Get the chords from the input box
-  
-    if (!selectedTuneKey) {
+});
+
+// Render tune list
+function renderTuneList(tunes) {
+  tuneListDiv.innerHTML = "";
+
+  if (tunes) {
+    Object.keys(tunes).forEach(function (key) {
+      const tune = tunes[key];
+
+      // Determine base background color based on knowledge
+      const knowledge = parseInt(tune.knowledge);
+      let bgColor = "#fff"; // default white
+      if (knowledge === 1) {
+        bgColor = "#fdd"; // light red
+      } else if (knowledge === 2) {
+        bgColor = "#ffd"; // light yellow
+      } else if (knowledge >= 3) {
+        bgColor = "#dfd"; // light green
+      }
+
+      // If this is the currently selected tune, override with blue highlight
+      const isSelected = selectedTuneKey === key;
+      if (isSelected) {
+        bgColor = "#cce5ff"; // light blue
+      }
+
+      const tuneItem = document.createElement("div");
+      tuneItem.style.display = "flex";
+      tuneItem.style.justifyContent = "flex-start";
+      tuneItem.style.gap = "20px";
+      tuneItem.style.padding = "5px 10px";
+      tuneItem.style.borderBottom = "1px solid #eee";
+      tuneItem.style.cursor = "pointer";
+      tuneItem.style.backgroundColor = bgColor;
+
+      tuneItem.innerHTML = `
+        <div style="flex: 2; text-align: left;">${tune.name || ""}</div>
+        <div style="flex: 1; text-align: left;">${tune.key || ""}</div>
+        <div style="flex: 1; text-align: left;">${tune.type || ""}</div>
+      `;
+
+      tuneItem.setAttribute("data-key", key);
+
+      tuneItem.addEventListener("click", function () {
+        selectedTuneKey = key;
+            // Clear chord diagrams immediately
+           document.getElementById("chordDiagramsContainer").innerHTML = "";
+
+        tuneDetailsText.value = tune.details || "";
+        detailsDisplay.textContent = tune.details || "";
+        tuneDetailsText.classList.add("hidden");
+        detailsDisplay.classList.remove("hidden");
+        editDetailsBtn.classList.remove("hidden");
+        saveDetailsBtn.classList.add("hidden");
+        tuneDetailsContainer.classList.remove("hidden");
+
+            // Show or hide the Link button
+    if (tune.link && tune.link.trim() !== "") {
+      clickLinkBtn.classList.remove("hidden");
+      clickLinkBtn.dataset.url = tune.link.trim();
+  } else {
+      clickLinkBtn.classList.add("hidden");
+      clickLinkBtn.dataset.url = "";
+  }
+
+  youtubePlayerContainer.classList.add("hidden");
+  youtubePlayerContainer.innerHTML = "";
+        
+
+        // Fetch full tune data
+        database.ref(`tunes/${currentMode}/${selectedTuneKey}`).once("value", function (snapshot) {
+          const data = snapshot.val() || {};
+          tuneData[selectedTuneKey] = data;
+
+          chordInput.value = data.chords || "";
+          chordInput.classList.add("hidden");
+
+          if (data.chords) {
+            showChordDiagrams(data.chords);
+          }
+        });
+
+        // Re-render list to update selection highlighting
+        renderTuneList(tunes);
+      });
+
+      tuneListDiv.appendChild(tuneItem);
+    });
+  } else {
+    tuneListDiv.textContent = "No tunes found.";
+  }
+}
+
+// clickLinkBtn.addEventListener("click", function () {
+//  const url = this.dataset.url;
+//  if (url) {
+//      window.open(url, "_blank");
+//  }
+// });
+
+
+clickLinkBtn.addEventListener("click", function () {
+  const url = this.dataset.url;
+  if (!url) return;
+
+  // Function to extract YouTube video ID from various YouTube URLs
+  function getYouTubeVideoID(url) {
+      const regExp = /^.*(?:youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+      const match = url.match(regExp);
+      return (match && match[1].length === 11) ? match[1] : null;
+  }
+
+  const videoID = getYouTubeVideoID(url);
+  if (videoID) {
+      // Embed YouTube iframe player
+      youtubePlayerContainer.innerHTML = `
+        <iframe 
+          width="560" height="315" 
+          src="https://www.youtube.com/embed/${videoID}?autoplay=1" 
+          frameborder="0" 
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
+          allowfullscreen>
+        </iframe>`;
+      youtubePlayerContainer.classList.remove("hidden");
+  } else {
+      // Not a valid YouTube URL — fallback: open in new tab
+      window.open(url, "_blank");
+  }
+});
+
+
+
+// Edit fields
+editDetailsBtn.addEventListener("click", function () {
+  tuneDetailsText.classList.remove("hidden");
+  chordInput.classList.remove("hidden");
+  nameInput.classList.remove("hidden");
+  linkInput.classList.remove("hidden");
+  keyInput.classList.remove("hidden");
+  typeInput.classList.remove("hidden");
+  editKnowledgeInput.classList.remove("hidden");
+
+  detailsDisplay.classList.add("hidden");
+  editDetailsBtn.classList.add("hidden");
+  saveDetailsBtn.classList.remove("hidden");
+
+  // Pre-fill edit fields
+  var tune = tuneData[selectedTuneKey] || {};
+  tuneDetailsText.value = tune.details || "";
+  chordInput.value = tune.chords || "";
+  nameInput.value = tune.name || "";
+  linkInput.value = tune.link || "";
+  keyInput.value = tune.key || "";
+  typeInput.value = tune.type || "";
+  editKnowledgeInput.value = tune.knowledge || "";
+});
+
+// Save edited details
+saveDetailsBtn.addEventListener("click", function () {
+  var details = tuneDetailsText.value;
+  var chords = chordInput.value;
+  var name = nameInput.value;
+  var link = linkInput.value;
+  var keyVal = keyInput.value;
+  var type = typeInput.value;
+  var knowledge = editKnowledgeInput.value;
+
+  if (!selectedTuneKey) {
       alert("No tune selected.");
       return;
-    }
-  
-    var tuneRef = database.ref("tunes/" + currentMode + "/" + selectedTuneKey);
-  
-    // Update both details and chords in the Firebase record
-    tuneRef.update({ 
+  }
+
+  database.ref(`tunes/${currentMode}/${selectedTuneKey}`).update({
       details: details,
-      chords: chords // Save the chords data
-    }, function (error) {
+      chords: chords,
+      name: name,
+      link: link,
+      key: keyVal,
+      type: type,
+      knowledge: knowledge
+  }, function (error) {
       if (error) {
-        console.error("Error updating details:", error);
+          console.error("Error updating tune:", error);
       } else {
-        detailsDisplay.textContent = details; // Update the details display
-        tuneDetailsText.classList.add("hidden"); // Hide the edit box
-        chordInput.classList.add("hidden"); // Hide the chord input box
-        detailsDisplay.classList.remove("hidden"); // Show the details display
-        editDetailsBtn.classList.remove("hidden"); // Show the edit button
-        saveDetailsBtn.classList.add("hidden"); // Hide the save button
+          detailsDisplay.textContent = details;
+          tuneDetailsText.classList.add("hidden");
+          chordInput.classList.add("hidden");
+          nameInput.classList.add("hidden");
+          linkInput.classList.add("hidden");
+          keyInput.classList.add("hidden");
+          typeInput.classList.add("hidden");
+          editKnowledgeInput.classList.add("hidden");
+
+          detailsDisplay.classList.remove("hidden");
+          editDetailsBtn.classList.remove("hidden");
+          saveDetailsBtn.classList.add("hidden");
       }
-    });
   });
-  
+});
+
   
 
   
