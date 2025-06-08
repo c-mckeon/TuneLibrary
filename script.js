@@ -35,17 +35,54 @@ const typeInput = document.getElementById("typeInput");
 const editKnowledgeInput = document.getElementById("knowledgeInput");
 var clickLinkBtn = document.getElementById("clicklink");
 const youtubePlayerContainer = document.getElementById("youtubePlayerContainer");
+const refreshBtn = document.getElementById("refreshbtn");
 
 
+let currentSortMode = -1; // 0=knowledge, 1=name, 2=type
+const sortBtn = document.getElementById("sortbtn");
 
-// Mode toggle
+sortBtn.addEventListener("click", () => {
+  currentSortMode = (currentSortMode + 1) % 3; // cycle 0->1->2->0
+  console.log("Sort mode changed to", currentSortMode);
+  loadTunes(); // reload tunes with new sorting
+});
+
+
+// Function to extract YouTube video ID from various YouTube URLs
+function getYouTubeVideoID(url) {
+  try {
+    const parsedUrl = new URL(url);
+    const hostname = parsedUrl.hostname;
+
+    if (hostname.includes("youtu.be")) {
+      return parsedUrl.pathname.slice(1);
+    }
+    if (hostname.includes("youtube.com")) {
+      if (parsedUrl.pathname === "/watch") {
+        return parsedUrl.searchParams.get("v");
+      }
+      if (parsedUrl.pathname.startsWith("/embed/")) {
+        return parsedUrl.pathname.split("/embed/")[1];
+      }
+      if (parsedUrl.pathname.startsWith("/shorts/")) {
+        return parsedUrl.pathname.split("/shorts/")[1];
+      }
+    }
+  } catch (e) {
+    console.warn("Invalid YouTube URL:", url);
+  }
+  return null;
+}
+
+// Mode toggle / load tunes
 function loadTunes() {
   var tunesRef = database.ref("tunes/" + currentMode);
-  tunesRef.on("value", function (snapshot) {
-      var tunes = snapshot.val();
-      renderTuneList(tunes);
+  tunesRef.once("value", function (snapshot) {
+    var tunes = snapshot.val();
+    renderTuneList(tunes);
   });
 }
+
 
 guitarBtn.addEventListener("click", function () {
   currentMode = "guitar";
@@ -69,148 +106,307 @@ mandolinBtn.addEventListener("click", function () {
 saveTuneBtn.addEventListener("click", function () {
   var tuneName = tuneNameInput.value.trim();
   var newTune = {
-      name: tuneName,
-      details: "",
-      mode: currentMode
+    name: tuneName,
+    details: "",
+    mode: currentMode
   };
   database.ref("tunes/" + currentMode).push(newTune, function (error) {
-      if (error) {
-          console.error("Error saving tune:", error);
-      } else {
-          tuneNameInput.value = "";
-          knowledgeInput.value = "";
-      }
+    if (error) {
+      console.error("Error saving tune:", error);
+    } else {
+      tuneNameInput.value = "";
+      knowledgeInput.value = "";
+    }
   });
 });
+
+// Refresh button functionality
+refreshBtn.addEventListener("click", function () {
+  console.log("Refreshing tunes list...");
+  selectedTuneKey = null;
+  tuneDetailsContainer.classList.add("hidden");
+  loadTunes();
+});
+
+let player; // global player object
+
+function onYouTubeIframeAPIReady() {
+  // No need to init now — we'll create players dynamically when a tune is played
+}
+
+let youtubePlayer;
+let currentCue = 0;
+
+// Load the YouTube IFrame API
+function loadYouTubeAPI(callback) {
+  if (window.YT && YT.Player) {
+    callback();
+  } else {
+    const tag = document.createElement("script");
+    tag.src = "https://www.youtube.com/iframe_api";
+    document.body.appendChild(tag);
+    window.onYouTubeIframeAPIReady = callback;
+  }
+}
+
+// Create YouTube Player
+function createYouTubePlayer(videoID, cueTime = 0) {
+  youtubePlayerContainer.innerHTML = '<div id="ytPlayer"></div>';
+  youtubePlayerContainer.classList.remove("hidden");
+
+  youtubePlayer = new YT.Player("ytPlayer", {
+    height: "315",
+    width: "600",
+    videoId: videoID,
+    playerVars: {
+      autoplay: 1,
+    },
+    events: {
+      onReady: () => {
+        youtubePlayer.seekTo(cueTime, true);
+        youtubePlayer.playVideo();
+        setupSpeedControls();
+        setupCueButton();
+      }
+    }
+  });
+}
+
+// Speed buttons
+function setupSpeedControls() {
+  document.querySelectorAll(".speed-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const speed = parseFloat(btn.dataset.speed);
+      if (youtubePlayer && youtubePlayer.setPlaybackRate) {
+        youtubePlayer.setPlaybackRate(speed);
+      }
+    });
+  });
+}
+
+// Cue button
+function setupCueButton() {
+  document.getElementById("cueBtn").addEventListener("click", () => {
+    if (youtubePlayer && youtubePlayer.seekTo) {
+      youtubePlayer.seekTo(currentCue, true);
+    }
+  });
+
+  const cueInput = document.getElementById("cueInput");
+  cueInput.value = currentCue;
+
+  cueInput.addEventListener("change", () => {
+    currentCue = parseFloat(cueInput.value) || 0;
+
+    if (selectedTuneKey) {
+      // Save cue to Firebase
+      database.ref(`tunes/${currentMode}/${selectedTuneKey}/cue`).set(currentCue);
+    }
+  });
+}
+
 
 // Render tune list
 function renderTuneList(tunes) {
   tuneListDiv.innerHTML = "";
 
-  if (tunes) {
-    Object.keys(tunes).forEach(function (key) {
-      const tune = tunes[key];
-
-      // Determine base background color based on knowledge
-      const knowledge = parseInt(tune.knowledge);
-      let bgColor = "#fff"; // default white
-      if (knowledge === 1) {
-        bgColor = "#fdd"; // light red
-      } else if (knowledge === 2) {
-        bgColor = "#ffd"; // light yellow
-      } else if (knowledge >= 3) {
-        bgColor = "#dfd"; // light green
-      }
-
-      // If this is the currently selected tune, override with blue highlight
-      const isSelected = selectedTuneKey === key;
-      if (isSelected) {
-        bgColor = "#cce5ff"; // light blue
-      }
-
-      const tuneItem = document.createElement("div");
-      tuneItem.style.display = "flex";
-      tuneItem.style.justifyContent = "flex-start";
-      tuneItem.style.gap = "20px";
-      tuneItem.style.padding = "5px 10px";
-      tuneItem.style.borderBottom = "1px solid #eee";
-      tuneItem.style.cursor = "pointer";
-      tuneItem.style.backgroundColor = bgColor;
-
-      tuneItem.innerHTML = `
-        <div style="flex: 2; text-align: left;">${tune.name || ""}</div>
-        <div style="flex: 1; text-align: left;">${tune.key || ""}</div>
-        <div style="flex: 1; text-align: left;">${tune.type || ""}</div>
-      `;
-
-      tuneItem.setAttribute("data-key", key);
-
-      tuneItem.addEventListener("click", function () {
-        selectedTuneKey = key;
-            // Clear chord diagrams immediately
-           document.getElementById("chordDiagramsContainer").innerHTML = "";
-
-        tuneDetailsText.value = tune.details || "";
-        detailsDisplay.textContent = tune.details || "";
-        tuneDetailsText.classList.add("hidden");
-        detailsDisplay.classList.remove("hidden");
-        editDetailsBtn.classList.remove("hidden");
-        saveDetailsBtn.classList.add("hidden");
-        tuneDetailsContainer.classList.remove("hidden");
-
-            // Show or hide the Link button
-    if (tune.link && tune.link.trim() !== "") {
-      clickLinkBtn.classList.remove("hidden");
-      clickLinkBtn.dataset.url = tune.link.trim();
-  } else {
-      clickLinkBtn.classList.add("hidden");
-      clickLinkBtn.dataset.url = "";
+  if (!tunes) {
+    tuneListDiv.textContent = "No tunes found.";
+    return;
   }
 
-  youtubePlayerContainer.classList.add("hidden");
-  youtubePlayerContainer.innerHTML = "";
-        
+  // 1) Convert to array [ [key, tune], ... ]
+  let tunesArray = Object.entries(tunes);
 
-        // Fetch full tune data
-        database.ref(`tunes/${currentMode}/${selectedTuneKey}`).once("value", function (snapshot) {
+  // 2) Conditionally sort
+  if (currentSortMode === 0) {
+    // Composite: knowledge ↓, name ↑, type ↑
+    tunesArray.sort((a, b) => {
+      const [ , ta ] = a;
+      const [ , tb ] = b;
+
+      const ka = parseInt(ta.knowledge) || 0;
+      const kb = parseInt(tb.knowledge) || 0;
+      if (kb !== ka) return kb - ka;
+
+      const na = (ta.name || "").toLowerCase();
+      const nb = (tb.name || "").toLowerCase();
+      if (na !== nb) return na.localeCompare(nb);
+
+      const taType = (ta.type || "").toLowerCase();
+      const tbType = (tb.type || "").toLowerCase();
+      return taType.localeCompare(tbType);
+    });
+  } else if (currentSortMode === 1) {
+    // Name only
+    tunesArray.sort((a, b) =>
+      (a[1].name || "").toLowerCase().localeCompare((b[1].name || "").toLowerCase())
+    );
+
+} else if (currentSortMode === 2) {
+  // Sort by type, with ties broken by knowledge descending
+  tunesArray.sort((a, b) => {
+    const typeA = (a[1].type || "").toLowerCase();
+    const typeB = (b[1].type || "").toLowerCase();
+    const typeCmp = typeA.localeCompare(typeB);
+    if (typeCmp !== 0) {
+      return typeCmp;           // different types
+    }
+    // same type → compare knowledge descending
+    const ka = parseInt(a[1].knowledge) || 0;
+    const kb = parseInt(b[1].knowledge) || 0;
+    return kb - ka;
+  });
+}
+  // if currentSortMode === -1, skip sorting => Firebase order
+
+  // 3) Render each tune
+  tunesArray.forEach(function ([key, tune]) {
+    const hasLink = tune.link && tune.link.trim() !== "";
+
+    // Determine background color
+    const knowledge = parseInt(tune.knowledge) || 0;
+    let bgColor = "#fff";
+    if (knowledge === 1) bgColor = "#fdd";
+    else if (knowledge === 2) bgColor = "#ffd";
+    else if (knowledge >= 3) bgColor = "#dfd";
+    if (selectedTuneKey === key) bgColor = "#cce5ff";
+
+    // Row container
+    const tuneItem = document.createElement("div");
+    tuneItem.setAttribute("data-key", key);
+    tuneItem.style.cssText = `
+      display: flex; justify-content: flex-start; align-items: center;
+      gap: 20px; padding: 5px 10px; border-bottom: 1px solid #eee;
+      cursor: pointer; background-color: ${bgColor};
+    `;
+
+    // Inner HTML
+    tuneItem.innerHTML = `
+      <div style="flex: 2; text-align: left;">${tune.name || ""}</div>
+      <div style="flex: 1; text-align: left;">${tune.key || ""}</div>
+      <div style="flex: 1; text-align: left;">${tune.type || ""}</div>
+      <div style="flex: 0 0 30px; text-align: center;">
+        ${hasLink
+          ? `<button
+               class="inline-link-btn"
+               title="Play video"
+               style="background:none;border:none;cursor:pointer;padding:0;font-size:16px;"
+               data-url="${tune.link.trim()}"
+               data-key="${key}">▶️</button>`
+          : `<span style="display:inline-block;width:24px;"></span>`}
+      </div>
+    `;
+
+    // Row click handler
+    tuneItem.addEventListener("click", function (e) {
+      if (e.target.classList.contains("inline-link-btn")) return;
+
+      selectedTuneKey = key;
+      document.getElementById("chordDiagramsContainer").innerHTML = "";
+
+      // Destroy existing YouTube player
+      if (player && typeof player.destroy === "function") {
+        player.destroy();
+        player = null;
+      }
+      youtubePlayerContainer.innerHTML = "";
+      youtubePlayerContainer.classList.add("hidden");
+
+      // Populate details
+      tuneDetailsText.value = tune.details || "";
+      detailsDisplay.textContent = tune.details || "";
+      tuneDetailsText.classList.add("hidden");
+      detailsDisplay.classList.remove("hidden");
+      editDetailsBtn.classList.remove("hidden");
+      saveDetailsBtn.classList.add("hidden");
+      tuneDetailsContainer.classList.remove("hidden");
+
+      // Show/hide main link button
+      if (hasLink) {
+        clickLinkBtn.classList.remove("hidden");
+        clickLinkBtn.dataset.url = tune.link.trim();
+      } else {
+        clickLinkBtn.classList.add("hidden");
+        clickLinkBtn.dataset.url = "";
+      }
+
+      // Fetch full tune data (including cue)
+      database
+        .ref(`tunes/${currentMode}/${selectedTuneKey}`)
+        .once("value", function (snapshot) {
           const data = snapshot.val() || {};
           tuneData[selectedTuneKey] = data;
 
+          // Chords
           chordInput.value = data.chords || "";
           chordInput.classList.add("hidden");
+          if (data.chords) showChordDiagrams(data.chords);
 
-          if (data.chords) {
-            showChordDiagrams(data.chords);
+          // Cue input
+          if (data.cue !== undefined) {
+            currentCue = data.cue;
+            document.getElementById("cueInput").value = currentCue;
+          } else {
+            currentCue = 0;
+            document.getElementById("cueInput").value = "";
           }
+
+          // Re-render list to update highlights
+          renderTuneList(tunes);
         });
-
-        // Re-render list to update selection highlighting
-        renderTuneList(tunes);
-      });
-
-      tuneListDiv.appendChild(tuneItem);
     });
-  } else {
-    tuneListDiv.textContent = "No tunes found.";
-  }
+
+    // Inline play button handler
+    if (hasLink) {
+      const btn = tuneItem.querySelector(".inline-link-btn");
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+
+        // Select this tune row
+        const row = document.querySelector(`[data-key="${this.dataset.key}"]`);
+        if (row) row.click();
+
+        // Play via YouTube IFrame API
+        const url = this.dataset.url;
+        const videoID = getYouTubeVideoID(url);
+        if (videoID) {
+          loadYouTubeAPI(() => {
+            createYouTubePlayer(videoID, currentCue);
+          });
+        } else {
+          window.open(url, "_blank");
+        }
+      });
+    }
+
+    tuneListDiv.appendChild(tuneItem);
+  });
+
+  console.log("Tune list rendered (mode:", currentSortMode, ")");
 }
 
-// clickLinkBtn.addEventListener("click", function () {
-//  const url = this.dataset.url;
-//  if (url) {
-//      window.open(url, "_blank");
-//  }
-// });
 
-
+// Main play button (below details pane)
 clickLinkBtn.addEventListener("click", function () {
   const url = this.dataset.url;
   if (!url) return;
 
-  // Function to extract YouTube video ID from various YouTube URLs
-  function getYouTubeVideoID(url) {
-      const regExp = /^.*(?:youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
-      const match = url.match(regExp);
-      return (match && match[1].length === 11) ? match[1] : null;
-  }
-
   const videoID = getYouTubeVideoID(url);
-  if (videoID) {
-      // Embed YouTube iframe player
-      youtubePlayerContainer.innerHTML = `
-        <iframe 
-          width="560" height="315" 
-          src="https://www.youtube.com/embed/${videoID}?autoplay=1" 
-          frameborder="0" 
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-          allowfullscreen>
-        </iframe>`;
-      youtubePlayerContainer.classList.remove("hidden");
-  } else {
-      // Not a valid YouTube URL — fallback: open in new tab
-      window.open(url, "_blank");
+if (videoID) {
+  loadYouTubeAPI(() => {
+    createYouTubePlayer(videoID, currentCue);
+  });
+}
+ else {
+    window.open(url, "_blank");
   }
 });
+
+
+// Initial load
+loadTunes();
+
 
 
 
