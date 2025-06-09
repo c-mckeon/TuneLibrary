@@ -11,7 +11,7 @@ var firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 var database = firebase.database();
 
-var currentMode = "guitar";
+var currentMode = "mandolin";
 var selectedTuneKey = null;
 var tuneData = {}; // Store fetched tune details for editing
 
@@ -36,6 +36,10 @@ const editKnowledgeInput = document.getElementById("knowledgeInput");
 var clickLinkBtn = document.getElementById("clicklink");
 const youtubePlayerContainer = document.getElementById("youtubePlayerContainer");
 const refreshBtn = document.getElementById("refreshbtn");
+
+
+mandolinBtn.classList.add("active");
+guitarBtn.classList.remove("active");
 
 
 let currentSortMode = -1; // 0=knowledge, 1=name, 2=type
@@ -149,10 +153,12 @@ function loadYouTubeAPI(callback) {
   }
 }
 
-// Create YouTube Player
 function createYouTubePlayer(videoID, cueTime = 0) {
-  youtubePlayerContainer.innerHTML = '<div id="ytPlayer"></div>';
-  youtubePlayerContainer.classList.remove("hidden");
+youtubePlayerContainer.innerHTML = `
+  <div id="ytPlayer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></div>
+`;
+youtubePlayerContainer.classList.remove("hidden");
+
 
   youtubePlayer = new YT.Player("ytPlayer", {
     height: "315",
@@ -162,15 +168,52 @@ function createYouTubePlayer(videoID, cueTime = 0) {
       autoplay: 1,
     },
     events: {
-      onReady: () => {
+      onReady: (event) => {
         youtubePlayer.seekTo(cueTime, true);
         youtubePlayer.playVideo();
         setupSpeedControls();
         setupCueButton();
-      }
+        setupPlayPauseButton();  // Setup your play/pause button events here
+      },
+      onStateChange: onPlayerStateChange // Listen to state changes
     }
   });
 }
+
+
+function setupPlayPauseButton() {
+  const playPauseBtn = document.getElementById("playPauseBtn");
+  if (!playPauseBtn) return;
+
+  playPauseBtn.addEventListener("click", () => {
+    if (!youtubePlayer || typeof youtubePlayer.getPlayerState !== "function") return;
+
+    const state = youtubePlayer.getPlayerState();
+    if (state === YT.PlayerState.PLAYING) {
+      youtubePlayer.pauseVideo();
+    } else {
+      youtubePlayer.playVideo();
+    }
+  });
+}
+
+function onPlayerStateChange(event) {
+  const playPauseBtn = document.getElementById("playPauseBtn");
+  if (!playPauseBtn) return;
+
+  switch (event.data) {
+    case YT.PlayerState.PLAYING:
+      playPauseBtn.textContent = "⏸︎"; // Pause symbol
+      break;
+    case YT.PlayerState.PAUSED:
+    case YT.PlayerState.ENDED:
+    case YT.PlayerState.UNSTARTED:
+      playPauseBtn.textContent = "⏵︎"; // Play symbol
+      break;
+  }
+}
+
+
 
 // Speed buttons
 function setupSpeedControls() {
@@ -201,6 +244,61 @@ function setupCueButton() {
     if (selectedTuneKey) {
       // Save cue to Firebase
       database.ref(`tunes/${currentMode}/${selectedTuneKey}/cue`).set(currentCue);
+    }
+  });
+}
+
+let loopEnabled = false;
+let loopStart = 0;
+let loopEnd = 0;
+let loopActive = false;
+let loopInterval = null;
+let isWaitingToLoop = false;
+
+function setupLoopControls() {
+  const loopBtn = document.getElementById("loopBtn");
+  const loopStartInput = document.getElementById("loopInputstart");
+  const loopEndInput = document.getElementById("loopInputend");
+  const loopDelayInput = document.getElementById("loopDelayInput");
+
+  loopBtn.addEventListener("click", function () {
+    loopActive = !loopActive;
+    loopBtn.style.backgroundColor = loopActive ? "#cce5ff" : "";
+
+    if (loopActive) {
+      loopInterval = setInterval(() => {
+        if (
+          youtubePlayer &&
+          youtubePlayer.getCurrentTime &&
+          !isWaitingToLoop
+        ) {
+          const currentTime = youtubePlayer.getCurrentTime();
+          const loopStart = parseFloat(loopStartInput.value) || 0;
+          const loopEnd = parseFloat(loopEndInput.value) || 0;
+          const delay = parseFloat(loopDelayInput.value) || 0;
+
+          if (loopEnd > loopStart && currentTime >= loopEnd) {
+            isWaitingToLoop = true;
+
+            // Pause if delay is > 0
+            if (delay > 0 && youtubePlayer.pauseVideo) {
+              youtubePlayer.pauseVideo();
+            }
+
+            setTimeout(() => {
+              youtubePlayer.seekTo(loopStart, true);
+              if (delay > 0 && youtubePlayer.playVideo) {
+                youtubePlayer.playVideo();
+              }
+              isWaitingToLoop = false;
+            }, delay * 1000);
+          }
+        }
+      }, 200);
+    } else {
+      clearInterval(loopInterval);
+      loopInterval = null;
+      isWaitingToLoop = false;
     }
   });
 }
@@ -590,3 +688,41 @@ function showChordDiagrams(chords) {
 
     chordDiagramsContainer.classList.remove("hidden");
 }
+
+
+setupLoopControls();
+setupPlayPauseButton();
+
+
+function showErrorOnRefreshBtn() {
+  const refreshBtn = document.getElementById("refreshbtn");
+  if (!refreshBtn) return;
+
+  refreshBtn.style.backgroundColor = "#f5b3c2";
+
+  setTimeout(() => {
+    refreshBtn.style.backgroundColor = "";
+  }, 10000);
+}
+
+function checkConnection() {
+  if (!navigator.onLine) {
+    showErrorOnRefreshBtn();
+  }
+}
+
+// Run check immediately on page load
+checkConnection();
+
+// Also listen for going offline after load
+window.addEventListener('offline', () => {
+  console.log('You are offline');
+  showErrorOnRefreshBtn();
+});
+
+// Optional: clear red when back online
+window.addEventListener('online', () => {
+  console.log('Back online');
+  const refreshBtn = document.getElementById("refreshbtn");
+  if (refreshBtn) refreshBtn.style.backgroundColor = "";
+});

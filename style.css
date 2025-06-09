@@ -101,3 +101,12 @@
     object-fit: contain; /* Ensure the images fit within their container */
   }
   
+#youtubeControls button,
+#youtubeControls input {
+  height: 25px;          /* fix the height */
+  padding: 0 8px;        /* consistent horizontal padding */
+  font-size: 14px;       /* consistent font size */
+  line-height: 23px;     /* vertical center text */
+  box-sizing: border-box; /* make padding included in height */
+  vertical-align: middle;
+}
