@@ -42,7 +42,7 @@ mandolinBtn.classList.add("active");
 guitarBtn.classList.remove("active");
 
 
-let currentSortMode = -1; // 0=knowledge, 1=name, 2=type
+let currentSortMode = 0; // 0=knowledge, 1=name, 2=type
 const sortBtn = document.getElementById("sortbtn");
 
 sortBtn.addEventListener("click", () => {
