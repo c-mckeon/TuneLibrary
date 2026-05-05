@@ -43,6 +43,17 @@ guitarBtn.classList.remove("active");
 
 
 let currentSortMode = 0; // 0=knowledge, 1=name, 2=type
+const knowledgeHeaders = {
+  1: "Next up",
+  2: "In progress",
+  3: "Outdated",
+  4: "Repertoire"
+};
+const expandedKnowledgeLevels = {
+  1: false,
+  2: false,
+  3: false
+};
 const sortBtn = document.getElementById("sortbtn");
 
 sortBtn.addEventListener("click", () => {
@@ -235,6 +246,14 @@ function setupCueButton() {
     }
   });
 
+  document.getElementById("skipBackBtn").addEventListener("click", () => {
+    if (youtubePlayer && youtubePlayer.getCurrentTime && youtubePlayer.seekTo) {
+      const currentTime = youtubePlayer.getCurrentTime();
+      const newTime = Math.max(0, currentTime - 5);
+      youtubePlayer.seekTo(newTime, true);
+    }
+  });
+
   const cueInput = document.getElementById("cueInput");
   cueInput.value = currentCue;
 
@@ -384,7 +403,7 @@ function renderTuneList(tunes) {
 
     const header = document.createElement("div");
     header.className = "knowledge-header level-4-header";
-    header.textContent = `Knowledge Level 4 (${groupedTunes[4].length} tunes)`;
+    header.textContent = `${knowledgeHeaders[4]} (${groupedTunes[4].length} tunes)`;
 
     section.appendChild(header);
 
@@ -396,30 +415,33 @@ function renderTuneList(tunes) {
     tuneListDiv.appendChild(section);
   }
 
-  // Levels 1-3: collapsible sections
-  for (let level = 1; level <= 3; level++) {
+  // Levels 1-3: collapsible sections in descending order
+  for (let level = 3; level >= 1; level--) {
     if (groupedTunes[level].length > 0) {
       const section = document.createElement("div");
       section.className = "knowledge-section";
 
       const header = document.createElement("div");
       header.className = "knowledge-header";
-      header.innerHTML = `<span class="toggle-icon">▶</span> Knowledge Level ${level} (${groupedTunes[level].length} tunes)`;
+      const isExpanded = expandedKnowledgeLevels[level];
+      header.innerHTML = `<span class="toggle-icon">${isExpanded ? '▼' : '▶'}</span> ${knowledgeHeaders[level]} (${groupedTunes[level].length} tunes)`;
       header.addEventListener("click", function() {
         const content = this.nextElementSibling;
         const icon = this.querySelector(".toggle-icon");
         if (content.style.display === "none") {
           content.style.display = "block";
           icon.textContent = "▼";
+          expandedKnowledgeLevels[level] = true;
         } else {
           content.style.display = "none";
           icon.textContent = "▶";
+          expandedKnowledgeLevels[level] = false;
         }
       });
 
       const content = document.createElement("div");
       content.className = "knowledge-content";
-      content.style.display = "none"; // Start collapsed
+      content.style.display = isExpanded ? "block" : "none";
 
       groupedTunes[level].forEach(([key, tune]) => {
         const tuneItem = createTuneItem(key, tune);
