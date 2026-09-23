@@ -27,6 +27,9 @@
       <button id="saveTune">Save</button>
       <button id="refreshbtn">↻</button>
       <button id="sortbtn">≡</button>
+      <button id="setsBtn">Sets</button>
+      <button id="addSetBtn" class="hidden">Add set</button>
+      <button id="saveSetBtn" class="hidden">Save set</button>
       
     </div>
     
@@ -44,22 +47,25 @@
 
     
    
-<div id="youtubeControls"      style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center;justify-content: center; 
-gap: 10px;">
-  <div >
+<div id="youtubeControls" class="player-controls">
+  <div class="player-control-group">
     <button id="playPauseBtn" >⏵︎</button>
-    <button class="speed-btn" style="margin-left: 15px;" data-speed="0.6">.6</button>
+    <button class="speed-btn" data-speed="0.6">.6</button>
     <button class="speed-btn" data-speed="0.7">.7</button>
     <button class="speed-btn" data-speed="0.8">.8</button>
     <button class="speed-btn" data-speed="0.9">.9</button>
+    <button class="speed-btn" data-speed="0.95">.95</button>
     <button class="speed-btn" data-speed="1">1</button>
+    <button class="speed-btn" data-speed="1.05">1.05</button>
+    <button class="speed-btn" data-speed="1.1">1.1</button>
+    <button class="speed-btn" data-speed="1.2">1.2</button>
     <button id="skipBackBtn" title="Rewind 5 seconds">« </button>
-    <button style="margin-left: 15px;" id="cueBtn">Cue</button>
+    <button id="cueBtn">Cue</button>
         <input id="cueInput" type="number" step="0.1" style="width: 50px;" /> 
   </div>
 
-  <div style="display: flex; align-items: center; gap: 5px;">
-    <button id="loopBtn" style="margin-left: 15px; ">Loop</button>
+  <div class="player-control-group">
+    <button id="loopBtn">Loop</button>
     <input id="loopInputstart" type="number" step="0.1" placeholder="⏵︎" style="width: 45px;" />
     <input id="loopInputend" type="number" step="0.1" placeholder="⏴︎" style="width: 45px;" />
     <input id="loopDelayInput" type="number" step="0.1" placeholder="⏸" style="width: 45px;" />
@@ -68,6 +74,8 @@ gap: 10px;">
 
  
     <div id="youtubePlayerContainer" class="hidden" style="margin-top: 10px; width: 100%; height: 0; padding-bottom: 56.25%; position: relative;"></div>
+
+    <div id="setPlaybackPanel" class="hidden"></div>
 
     <div id="detailsDisplay"></div>
     <div id=youtubeControls style="margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center;justify-content: center; 
@@ -92,6 +100,8 @@ gap: 10px;">
 <!-- Additional Edit Fields -->
 <input type="text" id="nameInput" class="hidden" style="width: 570px;" placeholder="Name">
 <input type="text" id="linkInput" class="hidden" style="width: 570px;" placeholder="Link">
+<div id="repertoireLinksEditor" class="hidden"></div>
+<button id="addRepertoireLinkBtn" class="hidden">Add link</button>
 <input type="text" id="keyInput" class="hidden" style="width: 570px;" placeholder="Key">
 <input type="text" id="typeInput" class="hidden" style="width: 570px;" placeholder="Type">
 <input type="number" id="knowledgeInput" class="hidden" style="width: 570px;" placeholder="Knowledge (1-5)"> <br>

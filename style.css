@@ -18,7 +18,7 @@
   /* Style for input form and list area */
   .input-box, .tune-list, .tune-details, .sorting {
     margin: 20px auto;
-    max-width: 600px;
+    max-width: 700px;
     text-align: center;
   }
   .input-box input {
@@ -38,7 +38,7 @@
   }
   
   
-  .tune-list div:hover {
+  .tune-list .tune-item:hover {
     background-color: #f0f0f0;
   }
   .hidden {
@@ -141,6 +141,97 @@
 .level-4-header:hover {
   background-color: #e8f5e8;
 }
+
+.set-selected {
+  background-color: #cce5ff !important;
+}
+
+.sets-content {
+  padding: 10px 15px;
+  text-align: left;
+  background-color: #fafafa;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+
+.sets-content:hover {
+  background-color: #e8e8e8;
+}
+
+#setPlaybackPanel {
+  width: 95%;
+  max-width: 700px;
+  margin: 15px auto;
+  text-align: left;
+}
+
+#setPlaybackPanel h3 {
+  margin-bottom: 10px;
+}
+
+.set-tune-block {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid #ddd;
+  background: #fafafa;
+}
+
+.set-tune-header {
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.set-link-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  margin-bottom: 5px;
+}
+
+.set-link-row input[type="url"],
+.repertoire-link-row input[type="url"] {
+  flex: 1 1 auto;
+  width: 360px;
+  min-width: 0;
+}
+
+.set-link-row input {
+  width: 58px;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.set-link-row input[type="checkbox"] {
+  width: 14px;
+  min-width: 14px;
+  flex: 0 0 14px;
+}
+
+.set-link-row button {
+  flex: 0 0 auto;
+}
+
+.set-links {
+  margin-bottom: 6px;
+}
+
+.repertoire-link-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 5px;
+  margin: 5px auto;
+  max-width: 700px;
+}
+
+.repertoire-link-row input[type="number"] {
+  width: 52px;
+  min-width: 52px;
+}
+
+.repertoire-link-row button {
+  flex: 0 0 auto;
+}
   
 #youtubeControls button,
 #youtubeControls input {
@@ -150,4 +241,101 @@
   line-height: 23px;     /* vertical center text */
   box-sizing: border-box; /* make padding included in height */
   vertical-align: middle;
+}
+
+#youtubeControls.player-controls button,
+#youtubeControls.player-controls input {
+  font-size: 11px;
+}
+
+#youtubeControls input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+#youtubeControls input[type="number"]::-webkit-inner-spin-button,
+#youtubeControls input[type="number"]::-webkit-outer-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.player-controls {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.player-control-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.player-controls .speed-btn {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.player-controls .speed-btn[data-speed="0.6"] {
+  background-color: #eef8ee;
+}
+
+.player-controls .speed-btn[data-speed="0.7"] {
+  background-color: #e5f3e5;
+}
+
+.player-controls .speed-btn[data-speed="0.8"] {
+  background-color: #dceddc;
+}
+
+.player-controls .speed-btn[data-speed="0.9"],
+.player-controls .speed-btn[data-speed="0.95"] {
+  background-color: #d3e8d3;
+}
+
+.player-controls .speed-btn[data-speed="1"] {
+  background-color: #cce5ff;
+}
+
+.player-controls .speed-btn[data-speed="1.05"] {
+  background-color: #c9e2c9;
+}
+
+.player-controls .speed-btn[data-speed="1.1"] {
+  background-color: #bddbbd;
+}
+
+.player-controls .speed-btn[data-speed="1.2"] {
+  background-color: #b0d3b0;
+  color: black;
+}
+
+.player-controls .speed-btn:hover {
+  filter: brightness(0.92);
+}
+
+.inline-link-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  width: 92px;
+}
+
+.inline-link-btn {
+  width: 27px;
+  height: 25px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
 }

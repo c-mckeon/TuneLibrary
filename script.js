@@ -14,6 +14,14 @@ var database = firebase.database();
 var currentMode = "mandolin";
 var selectedTuneKey = null;
 var tuneData = {}; // Store fetched tune details for editing
+var isSetsMode = false;
+var isSelectingSet = false;
+var selectedSetTuneKeys = new Set();
+var activeSet = null;
+var setPlaybackQueue = [];
+var setPlaybackIndex = -1;
+var setPlaybackTimer = null;
+var editingTuneLinks = [];
 
 // DOM Elements
 var guitarBtn = document.getElementById("guitarBtn");
@@ -33,9 +41,15 @@ const linkInput = document.getElementById("linkInput");
 const keyInput = document.getElementById("keyInput");
 const typeInput = document.getElementById("typeInput");
 const editKnowledgeInput = document.getElementById("knowledgeInput");
+const repertoireLinksEditor = document.getElementById("repertoireLinksEditor");
+const addRepertoireLinkBtn = document.getElementById("addRepertoireLinkBtn");
 var clickLinkBtn = document.getElementById("clicklink");
 const youtubePlayerContainer = document.getElementById("youtubePlayerContainer");
+const setPlaybackPanel = document.getElementById("setPlaybackPanel");
 const refreshBtn = document.getElementById("refreshbtn");
+const setsBtn = document.getElementById("setsBtn");
+const addSetBtn = document.getElementById("addSetBtn");
+const saveSetBtn = document.getElementById("saveSetBtn");
 
 
 mandolinBtn.classList.add("active");
@@ -91,6 +105,13 @@ function getYouTubeVideoID(url) {
 
 // Mode toggle / load tunes
 function loadTunes() {
+  if (isSetsMode && !isSelectingSet) {
+    database.ref("sets/" + currentMode).once("value", function (snapshot) {
+      renderSets(snapshot.val());
+    });
+    return;
+  }
+
   var tunesRef = database.ref("tunes/" + currentMode);
   tunesRef.once("value", function (snapshot) {
     var tunes = snapshot.val();
@@ -101,6 +122,7 @@ function loadTunes() {
 
 guitarBtn.addEventListener("click", function () {
   currentMode = "guitar";
+  leaveSetsMode();
   guitarBtn.classList.add("active");
   mandolinBtn.classList.remove("active");
   selectedTuneKey = null;
@@ -110,6 +132,7 @@ guitarBtn.addEventListener("click", function () {
 
 mandolinBtn.addEventListener("click", function () {
   currentMode = "mandolin";
+  leaveSetsMode();
   mandolinBtn.classList.add("active");
   guitarBtn.classList.remove("active");
   selectedTuneKey = null;
@@ -143,6 +166,81 @@ refreshBtn.addEventListener("click", function () {
   loadTunes();
 });
 
+function updateSetControls() {
+  setsBtn.textContent = isSetsMode ? "Repertoire" : "Sets";
+  addSetBtn.classList.toggle("hidden", !isSetsMode || isSelectingSet);
+  saveSetBtn.classList.toggle("hidden", !isSetsMode || !isSelectingSet);
+}
+
+function leaveSetsMode() {
+  isSetsMode = false;
+  isSelectingSet = false;
+  selectedSetTuneKeys.clear();
+  activeSet = null;
+  clearInterval(setPlaybackTimer);
+  setPlaybackPanel.classList.add("hidden");
+  updateSetControls();
+}
+
+setsBtn.addEventListener("click", function () {
+  if (isSetsMode) {
+    leaveSetsMode();
+  } else {
+    isSetsMode = true;
+    isSelectingSet = false;
+    selectedSetTuneKeys.clear();
+    selectedTuneKey = null;
+    tuneDetailsContainer.classList.add("hidden");
+    updateSetControls();
+  }
+  loadTunes();
+});
+
+addSetBtn.addEventListener("click", function () {
+  isSelectingSet = true;
+  selectedSetTuneKeys.clear();
+  updateSetControls();
+  loadTunes();
+});
+
+saveSetBtn.addEventListener("click", function () {
+  if (selectedSetTuneKeys.size === 0) {
+    alert("Select at least one tune for the set.");
+    return;
+  }
+
+  database.ref("tunes/" + currentMode).once("value", function (snapshot) {
+    const tunes = snapshot.val() || {};
+    const setTunes = Array.from(selectedSetTuneKeys)
+      .map(key => {
+        const tune = tunes[key];
+        if (!tune) return null;
+        return {
+          key: key,
+          name: tune.name || "",
+          type: tune.type || "",
+          links: getTuneLinks(tune)
+        };
+      })
+      .filter(Boolean);
+    const tuneNames = setTunes.map(tune => tune.name).filter(Boolean);
+
+    database.ref("sets/" + currentMode).push({
+      tunes: setTunes,
+      name: tuneNames.join(", ")
+    }, function (error) {
+      if (error) {
+        console.error("Error saving set:", error);
+        return;
+      }
+      isSelectingSet = false;
+      selectedSetTuneKeys.clear();
+      updateSetControls();
+      loadTunes();
+    });
+  });
+});
+
 let player; // global player object
 
 function onYouTubeIframeAPIReady() {
@@ -164,30 +262,84 @@ function loadYouTubeAPI(callback) {
   }
 }
 
-function createYouTubePlayer(videoID, cueTime = 0) {
+function createYouTubePlayer(videoID, cueTime = 0, autoplay = true, onReadyCallback = null) {
 youtubePlayerContainer.innerHTML = `
   <div id="ytPlayer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></div>
 `;
 youtubePlayerContainer.classList.remove("hidden");
 
+  const playerVars = {
+    autoplay: autoplay ? 1 : 0,
+    playsinline: 1
+  };
+  if (window.location.protocol === "http:" || window.location.protocol === "https:") {
+    playerVars.origin = window.location.origin;
+  }
 
   youtubePlayer = new YT.Player("ytPlayer", {
     height: "315",
     width: "600",
     videoId: videoID,
-    playerVars: {
-      autoplay: 1,
-    },
+    playerVars: playerVars,
     events: {
       onReady: (event) => {
         youtubePlayer.seekTo(cueTime, true);
-        youtubePlayer.playVideo();
+        if (autoplay) youtubePlayer.playVideo();
         setupSpeedControls();
         setupCueButton();
         setupPlayPauseButton();  // Setup your play/pause button events here
+        if (onReadyCallback) onReadyCallback();
       },
       onStateChange: onPlayerStateChange // Listen to state changes
     }
+  });
+}
+
+function playSetLink(tuneIndex, linkIndex) {
+  if (!activeSet || !activeSet.tunes[tuneIndex]) return;
+
+  clearInterval(setPlaybackTimer);
+  setPlaybackQueue = [activeSet.tunes[tuneIndex].links[linkIndex]];
+  setPlaybackIndex = 0;
+  playCurrentSetQueueItem();
+}
+
+function playSelectedSet() {
+  if (!activeSet) return;
+
+  setPlaybackQueue = activeSet.tunes
+    .map(tune => tune.links.find(link => link.selected === true))
+    .filter(link => link && getYouTubeVideoID(link.url));
+
+  if (setPlaybackQueue.length === 0) {
+    alert("Select a version for at least one tune.");
+    return;
+  }
+
+  clearInterval(setPlaybackTimer);
+  setPlaybackIndex = 0;
+  playCurrentSetQueueItem();
+}
+
+function playCurrentSetQueueItem() {
+  const link = setPlaybackQueue[setPlaybackIndex];
+  if (!link) {
+    clearInterval(setPlaybackTimer);
+    return;
+  }
+
+  const videoID = getYouTubeVideoID(link.url);
+  loadYouTubeAPI(() => {
+    createYouTubePlayer(videoID, Number(link.start) || 0, true, () => {
+      clearInterval(setPlaybackTimer);
+      setPlaybackTimer = setInterval(() => {
+        if (!youtubePlayer || link.end === "" || link.end === undefined) return;
+        if (youtubePlayer.getCurrentTime() >= Number(link.end)) {
+          setPlaybackIndex += 1;
+          playCurrentSetQueueItem();
+        }
+      }, 200);
+    });
   });
 }
 
@@ -332,6 +484,11 @@ function renderTuneList(tunes) {
     return;
   }
 
+  if (isSelectingSet) {
+    renderSetSelection(tunes);
+    return;
+  }
+
   // 1) Convert to array [ [key, tune], ... ]
   let tunesArray = Object.entries(tunes);
 
@@ -375,7 +532,8 @@ function renderTuneList(tunes) {
     return kb - ka;
   });
 }
-  // if currentSortMode === -1, skip sorting => Firebase order
+
+// if currentSortMode === -1, skip sorting => Firebase order
 
   // 3) Group tunes by knowledge level
   const groupedTunes = {
@@ -457,9 +615,291 @@ function renderTuneList(tunes) {
   console.log("Tune list rendered (mode:", currentSortMode, ")");
 }
 
+function renderSetSelection(tunes) {
+  const section = document.createElement("div");
+  section.className = "knowledge-section sets-section";
+
+  const header = document.createElement("div");
+  header.className = "knowledge-header level-4-header";
+  header.textContent = "Select tunes for new set";
+  section.appendChild(header);
+
+  Object.entries(tunes)
+    .sort((a, b) => {
+      const typeCompare = (a[1].type || "").toLowerCase().localeCompare((b[1].type || "").toLowerCase());
+      if (typeCompare !== 0) return typeCompare;
+      return (a[1].name || "").toLowerCase().localeCompare((b[1].name || "").toLowerCase());
+    })
+    .forEach(([key, tune]) => {
+      const tuneItem = createTuneItem(key, tune);
+      tuneItem.classList.toggle("set-selected", selectedSetTuneKeys.has(key));
+      section.appendChild(tuneItem);
+    });
+
+  tuneListDiv.appendChild(section);
+}
+
+function renderSets(sets) {
+  tuneListDiv.innerHTML = "";
+  const section = document.createElement("div");
+  section.className = "knowledge-section sets-section";
+
+  const header = document.createElement("div");
+  header.className = "knowledge-header level-4-header";
+  header.textContent = "Sets";
+  section.appendChild(header);
+
+  if (!sets) {
+    const empty = document.createElement("div");
+    empty.className = "sets-content";
+    empty.textContent = "No sets saved.";
+    section.appendChild(empty);
+  } else {
+    Object.entries(sets).forEach(([setKey, savedSet]) => {
+      const set = { ...savedSet, key: setKey };
+      const setItem = document.createElement("div");
+      setItem.className = "sets-content";
+      setItem.textContent = set.name || (set.tunes || []).map(tune => typeof tune === "object" ? tune.name : tune).join(", ");
+      setItem.addEventListener("click", function () {
+        database.ref("tunes/" + currentMode).once("value", function (snapshot) {
+          renderSetPlayback(set, snapshot.val() || {});
+        });
+      });
+      section.appendChild(setItem);
+    });
+  }
+
+  tuneListDiv.appendChild(section);
+}
+
+function getTuneLinks(tune) {
+  if (Array.isArray(tune.links)) {
+    return tune.links.map(link => ({
+      url: link.url || "",
+      start: Number(link.start) || 0,
+      end: link.end === "" || link.end === undefined ? "" : Number(link.end) || 0,
+      selected: link.selected === true
+    }));
+  }
+  if (tune.link) {
+    return [{ url: tune.link, start: Number(tune.cue) || 0, end: "" }];
+  }
+  return [];
+}
+
+function playTuneLink(link) {
+  const videoID = getYouTubeVideoID(link.url);
+  if (!videoID) return;
+  loadYouTubeAPI(() => {
+    createYouTubePlayer(videoID, Number(link.start) || 0);
+  });
+}
+
+function renderRepertoireLinksEditor(tune) {
+  editingTuneLinks = getTuneLinks(tune);
+  if (editingTuneLinks.length === 0) {
+    editingTuneLinks.push({ url: "", start: 0, end: "" });
+  }
+  repertoireLinksEditor.innerHTML = "";
+  editingTuneLinks.forEach((link, index) => {
+    repertoireLinksEditor.appendChild(createRepertoireLinkRow(link, index));
+  });
+}
+
+function createRepertoireLinkRow(link, index) {
+  const row = document.createElement("div");
+  row.className = "repertoire-link-row";
+
+  const playButton = document.createElement("button");
+  playButton.textContent = "Play";
+  playButton.type = "button";
+  playButton.addEventListener("click", () => playTuneLink(editingTuneLinks[index]));
+
+  const urlInput = document.createElement("input");
+  urlInput.type = "url";
+  urlInput.placeholder = "YouTube link";
+  urlInput.value = link.url || "";
+  urlInput.addEventListener("input", () => { editingTuneLinks[index].url = urlInput.value.trim(); });
+
+  const startInput = document.createElement("input");
+  startInput.type = "number";
+  startInput.min = "0";
+  startInput.step = "0.1";
+  startInput.placeholder = "Start";
+  startInput.value = link.start || 0;
+  startInput.addEventListener("input", () => { editingTuneLinks[index].start = Number(startInput.value) || 0; });
+
+  const endInput = document.createElement("input");
+  endInput.type = "number";
+  endInput.min = "0";
+  endInput.step = "0.1";
+  endInput.placeholder = "End";
+  endInput.value = link.end;
+  endInput.addEventListener("input", () => { editingTuneLinks[index].end = endInput.value === "" ? "" : Number(endInput.value) || 0; });
+
+  row.appendChild(playButton);
+  row.appendChild(urlInput);
+  row.appendChild(startInput);
+  row.appendChild(endInput);
+  return row;
+}
+
+function getSetTunes(set, repertoire) {
+  const savedTunes = Array.isArray(set.tunes) ? set.tunes : Object.values(set.tunes || {});
+  return savedTunes.map(savedTune => {
+    if (typeof savedTune === "object") {
+      const links = getTuneLinks(savedTune);
+      if (savedTune.selectedLinkIndex !== undefined && links[savedTune.selectedLinkIndex]) {
+        links[savedTune.selectedLinkIndex].selected = true;
+      }
+      return {
+        key: savedTune.key || "",
+        name: savedTune.name || "Unnamed tune",
+        type: savedTune.type || "",
+        links: links
+      };
+    }
+
+    const match = Object.entries(repertoire).find(([, tune]) => tune.name === savedTune);
+    return match
+      ? { key: match[0], name: match[1].name || savedTune, type: match[1].type || "", links: getTuneLinks(match[1]) }
+      : { key: "", name: savedTune, type: "", links: [] };
+  });
+}
+
+function renderSetPlayback(set, repertoire) {
+  clearInterval(setPlaybackTimer);
+  if (youtubePlayer && typeof youtubePlayer.destroy === "function") {
+    youtubePlayer.destroy();
+    youtubePlayer = null;
+  }
+  youtubePlayerContainer.innerHTML = "";
+  youtubePlayerContainer.classList.add("hidden");
+  activeSet = set;
+  activeSet.tunes = getSetTunes(set, repertoire);
+  setPlaybackQueue = [];
+  setPlaybackIndex = -1;
+  setPlaybackPanel.innerHTML = "";
+  setPlaybackPanel.classList.remove("hidden");
+  tuneDetailsContainer.classList.remove("hidden");
+  detailsDisplay.classList.add("hidden");
+
+  const title = document.createElement("h3");
+  title.textContent = "Set playback";
+  setPlaybackPanel.appendChild(title);
+
+  const playSetButton = document.createElement("button");
+  playSetButton.textContent = "Play set";
+  playSetButton.addEventListener("click", playSelectedSet);
+  setPlaybackPanel.appendChild(playSetButton);
+
+  activeSet.tunes.forEach((tune, tuneIndex) => {
+    const tuneBlock = document.createElement("div");
+    tuneBlock.className = "set-tune-block";
+
+    const tuneHeader = document.createElement("div");
+    tuneHeader.className = "set-tune-header";
+    tuneHeader.textContent = tune.type ? `${tune.name} (${tune.type})` : tune.name;
+    tuneBlock.appendChild(tuneHeader);
+
+    const linksContainer = document.createElement("div");
+    linksContainer.className = "set-links";
+    tune.links.forEach((link, linkIndex) => {
+      linksContainer.appendChild(createSetLinkRow(tuneIndex, linkIndex, link));
+    });
+
+    const addLinkButton = document.createElement("button");
+    addLinkButton.textContent = "Add link";
+    addLinkButton.addEventListener("click", function () {
+      tune.links.push({ url: "", start: 0, end: "" });
+      linksContainer.appendChild(createSetLinkRow(tuneIndex, tune.links.length - 1, tune.links[tune.links.length - 1]));
+    });
+
+    tuneBlock.appendChild(linksContainer);
+    tuneBlock.appendChild(addLinkButton);
+    setPlaybackPanel.appendChild(tuneBlock);
+  });
+
+  const saveButton = document.createElement("button");
+  saveButton.textContent = "Save set timings";
+  saveButton.addEventListener("click", function () {
+    if (!set.key) {
+      alert("This set has no Firebase key.");
+      return;
+    }
+    database.ref(`sets/${currentMode}/${set.key}`).update({ tunes: activeSet.tunes });
+  });
+  setPlaybackPanel.appendChild(saveButton);
+
+}
+
+function createSetLinkRow(tuneIndex, linkIndex, link) {
+  const row = document.createElement("div");
+  row.className = "set-link-row";
+  row.dataset.tuneIndex = tuneIndex;
+
+  const urlInput = document.createElement("input");
+  urlInput.type = "url";
+  urlInput.placeholder = "YouTube link";
+  urlInput.value = link.url || "";
+  urlInput.addEventListener("change", () => { activeSet.tunes[tuneIndex].links[linkIndex].url = urlInput.value.trim(); });
+
+  const selectInput = document.createElement("input");
+  selectInput.type = "checkbox";
+  selectInput.title = "Use this version in Play set";
+  selectInput.checked = link.selected === true;
+  selectInput.addEventListener("change", () => {
+    const tuneLinks = activeSet.tunes[tuneIndex].links;
+    if (selectInput.checked) {
+      tuneLinks.forEach((tuneLink, index) => {
+        tuneLink.selected = index === linkIndex;
+      });
+      setPlaybackPanel.querySelectorAll(`.set-link-row[data-tune-index="${tuneIndex}"] input[type="checkbox"]`).forEach((checkbox, index) => {
+        checkbox.checked = index === linkIndex;
+      });
+    } else {
+      tuneLinks[linkIndex].selected = false;
+    }
+    syncSetSelections();
+  });
+
+  const startInput = document.createElement("input");
+  startInput.type = "number";
+  startInput.min = "0";
+  startInput.step = "0.1";
+  startInput.placeholder = "Start (s)";
+  startInput.value = link.start || 0;
+  startInput.addEventListener("change", () => { activeSet.tunes[tuneIndex].links[linkIndex].start = Number(startInput.value) || 0; });
+
+  const endInput = document.createElement("input");
+  endInput.type = "number";
+  endInput.min = "0";
+  endInput.step = "0.1";
+  endInput.placeholder = "End (s)";
+  endInput.value = link.end;
+  endInput.addEventListener("change", () => { activeSet.tunes[tuneIndex].links[linkIndex].end = endInput.value === "" ? "" : Number(endInput.value) || 0; });
+
+  const playButton = document.createElement("button");
+  playButton.textContent = "Play";
+  playButton.addEventListener("click", () => playSetLink(tuneIndex, linkIndex));
+
+  row.appendChild(selectInput);
+  row.appendChild(urlInput);
+  row.appendChild(startInput);
+  row.appendChild(endInput);
+  row.appendChild(playButton);
+  return row;
+}
+
+function syncSetSelections() {
+  if (!activeSet || !activeSet.key) return;
+  database.ref(`sets/${currentMode}/${activeSet.key}/tunes`).set(activeSet.tunes);
+}
+
 // Helper function to create a tune item
 function createTuneItem(key, tune) {
-  const hasLink = tune.link && tune.link.trim() !== "";
+  const tuneLinks = getTuneLinks(tune).filter(link => link.url.trim() !== "").slice(0, 4);
+  const hasLink = tuneLinks.length > 0;
 
   // Determine background color
   const knowledge = parseInt(tune.knowledge) || 0;
@@ -471,6 +911,7 @@ function createTuneItem(key, tune) {
 
   // Row container
   const tuneItem = document.createElement("div");
+  tuneItem.className = "tune-item";
   tuneItem.setAttribute("data-key", key);
   tuneItem.style.cssText = `
     display: flex; justify-content: flex-start; align-items: center;
@@ -483,15 +924,8 @@ function createTuneItem(key, tune) {
     <div style="flex: 2; text-align: left;">${tune.name || ""}</div>
     <div style="flex: 1; text-align: left;">${tune.key || ""}</div>
     <div style="flex: 1; text-align: left;">${tune.type || ""}</div>
-    <div style="flex: 0 0 30px; text-align: center;">
-      ${hasLink
-        ? `<button
-             class="inline-link-btn"
-             title="Play video"
-             style="background:none;border:none;cursor:pointer;padding:0;font-size:16px;"
-             data-url="${tune.link.trim()}"
-             data-key="${key}">▶️</button>`
-        : `<span style="display:inline-block;width:24px;"></span>`}
+    <div class="inline-link-buttons">
+      ${tuneLinks.map((link, index) => `<button class="inline-link-btn available" title="Play saved link ${index + 1}" data-link-index="${index}" data-key="${key}">▶️</button>`).join("")}
     </div>
   `;
 
@@ -499,7 +933,25 @@ function createTuneItem(key, tune) {
   tuneItem.addEventListener("click", function (e) {
     if (e.target.classList.contains("inline-link-btn")) return;
 
+    if (isSelectingSet) {
+      if (selectedSetTuneKeys.has(key)) {
+        selectedSetTuneKeys.delete(key);
+      } else {
+        selectedSetTuneKeys.add(key);
+      }
+      tuneItem.classList.toggle("set-selected", selectedSetTuneKeys.has(key));
+      return;
+    }
+
+    if (!saveDetailsBtn.classList.contains("hidden") && selectedTuneKey && selectedTuneKey !== key) {
+      saveEditedTune(() => tuneItem.click());
+      return;
+    }
+
     selectedTuneKey = key;
+    activeSet = null;
+    clearInterval(setPlaybackTimer);
+    setPlaybackPanel.classList.add("hidden");
     document.getElementById("chordDiagramsContainer").innerHTML = "";
 
     // Destroy existing YouTube player
@@ -556,8 +1008,8 @@ function createTuneItem(key, tune) {
 
   // Inline play button handler
   if (hasLink) {
-    const btn = tuneItem.querySelector(".inline-link-btn");
-    btn.addEventListener("click", function (e) {
+    tuneItem.querySelectorAll(".inline-link-btn.available").forEach(btn => {
+      btn.addEventListener("click", function (e) {
       e.stopPropagation();
 
       // Select this tune row
@@ -565,15 +1017,17 @@ function createTuneItem(key, tune) {
       if (row) row.click();
 
       // Play via YouTube IFrame API
-      const url = this.dataset.url;
+      const link = tuneLinks[Number(this.dataset.linkIndex)];
+      const url = link.url;
       const videoID = getYouTubeVideoID(url);
       if (videoID) {
         loadYouTubeAPI(() => {
-          createYouTubePlayer(videoID, currentCue);
+          createYouTubePlayer(videoID, Number(link.start) || currentCue);
         });
       } else {
         window.open(url, "_blank");
       }
+      });
     });
   }
 
@@ -609,7 +1063,9 @@ editDetailsBtn.addEventListener("click", function () {
   tuneDetailsText.classList.remove("hidden");
   chordInput.classList.remove("hidden");
   nameInput.classList.remove("hidden");
-  linkInput.classList.remove("hidden");
+  linkInput.classList.add("hidden");
+  repertoireLinksEditor.classList.remove("hidden");
+  addRepertoireLinkBtn.classList.remove("hidden");
   keyInput.classList.remove("hidden");
   typeInput.classList.remove("hidden");
   editKnowledgeInput.classList.remove("hidden");
@@ -624,17 +1080,39 @@ editDetailsBtn.addEventListener("click", function () {
   chordInput.value = tune.chords || "";
   nameInput.value = tune.name || "";
   linkInput.value = tune.link || "";
+  renderRepertoireLinksEditor(tune);
   keyInput.value = tune.key || "";
   typeInput.value = tune.type || "";
   editKnowledgeInput.value = tune.knowledge || "";
 });
 
-// Save edited details
-saveDetailsBtn.addEventListener("click", function () {
+addRepertoireLinkBtn.addEventListener("click", function () {
+  const newLink = { url: "", start: 0, end: "" };
+  editingTuneLinks.push(newLink);
+  repertoireLinksEditor.appendChild(createRepertoireLinkRow(newLink, editingTuneLinks.length - 1));
+});
+
+function finishEditingTune() {
+  detailsDisplay.classList.remove("hidden");
+  editDetailsBtn.classList.remove("hidden");
+  saveDetailsBtn.classList.add("hidden");
+  tuneDetailsText.classList.add("hidden");
+  chordInput.classList.add("hidden");
+  nameInput.classList.add("hidden");
+  linkInput.classList.add("hidden");
+  repertoireLinksEditor.classList.add("hidden");
+  addRepertoireLinkBtn.classList.add("hidden");
+  keyInput.classList.add("hidden");
+  typeInput.classList.add("hidden");
+  editKnowledgeInput.classList.add("hidden");
+}
+
+function saveEditedTune(onComplete) {
   var details = tuneDetailsText.value;
   var chords = chordInput.value;
   var name = nameInput.value;
-  var link = linkInput.value;
+  var links = editingTuneLinks.filter(link => link.url.trim() !== "");
+  var link = links.length > 0 ? links[0].url : "";
   var keyVal = keyInput.value;
   var type = typeInput.value;
   var knowledge = editKnowledgeInput.value;
@@ -649,6 +1127,7 @@ saveDetailsBtn.addEventListener("click", function () {
       chords: chords,
       name: name,
       link: link,
+      links: links,
       key: keyVal,
       type: type,
       knowledge: knowledge
@@ -657,19 +1136,19 @@ saveDetailsBtn.addEventListener("click", function () {
           console.error("Error updating tune:", error);
       } else {
           detailsDisplay.textContent = details;
-          tuneDetailsText.classList.add("hidden");
-          chordInput.classList.add("hidden");
-          nameInput.classList.add("hidden");
-          linkInput.classList.add("hidden");
-          keyInput.classList.add("hidden");
-          typeInput.classList.add("hidden");
-          editKnowledgeInput.classList.add("hidden");
-
-          detailsDisplay.classList.remove("hidden");
-          editDetailsBtn.classList.remove("hidden");
-          saveDetailsBtn.classList.add("hidden");
+          tuneData[selectedTuneKey] = {
+            ...(tuneData[selectedTuneKey] || {}),
+            details, chords, name, link, links, key: keyVal, type, knowledge
+          };
+          finishEditingTune();
+          if (onComplete) onComplete();
       }
   });
+}
+
+// Save edited details
+saveDetailsBtn.addEventListener("click", function () {
+  saveEditedTune();
 });
 
   
