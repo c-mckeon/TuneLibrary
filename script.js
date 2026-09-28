@@ -21,6 +21,11 @@ var activeSet = null;
 var setPlaybackQueue = [];
 var setPlaybackIndex = -1;
 var setPlaybackTimer = null;
+var setYoutubePlayers = [null, null];
+var setPlayerReady = [false, false];
+var setPreparedQueueIndexes = [-1, -1];
+var setActivePlayerIndex = 0;
+var setPendingTransition = false;
 var editingTuneLinks = [];
 
 // DOM Elements
@@ -33,6 +38,8 @@ var tuneListDiv = document.getElementById("tuneList");
 var tuneDetailsContainer = document.getElementById("tuneDetailsContainer");
 var tuneDetailsText = document.getElementById("tuneDetails");
 var detailsDisplay = document.getElementById("detailsDisplay");
+var detailsControls = document.getElementById("detailsControls");
+var editControls = document.getElementById("editControls");
 var saveDetailsBtn = document.getElementById("saveDetails");
 var editDetailsBtn = document.getElementById("editDetailsBtn");
 var chordInput = document.getElementById("chordInput");
@@ -45,15 +52,34 @@ const repertoireLinksEditor = document.getElementById("repertoireLinksEditor");
 const addRepertoireLinkBtn = document.getElementById("addRepertoireLinkBtn");
 var clickLinkBtn = document.getElementById("clicklink");
 const youtubePlayerContainer = document.getElementById("youtubePlayerContainer");
+const setYoutubePlayersContainer = document.getElementById("setYoutubePlayers");
 const setPlaybackPanel = document.getElementById("setPlaybackPanel");
+const loopControls = document.getElementById("loopControls");
 const refreshBtn = document.getElementById("refreshbtn");
 const setsBtn = document.getElementById("setsBtn");
 const addSetBtn = document.getElementById("addSetBtn");
 const saveSetBtn = document.getElementById("saveSetBtn");
 
+function updateModeClass() {
+  document.body.classList.toggle("mandolin-mode", currentMode === "mandolin");
+}
+
+function updateDetailsDisplay() {
+  var hasDetails = tuneDetailsText.value.trim() !== "";
+  var isEditing = !saveDetailsBtn.classList.contains("hidden");
+  detailsDisplay.classList.toggle(
+    "hidden",
+    currentMode === "mandolin" && !hasDetails && !isEditing
+  );
+  detailsControls.classList.toggle(
+    "hidden",
+    currentMode === "mandolin" && !hasDetails && !isEditing
+  );
+}
 
 mandolinBtn.classList.add("active");
 guitarBtn.classList.remove("active");
+updateModeClass();
 
 
 let currentSortMode = 0; // 0=knowledge, 1=name, 2=type
@@ -122,6 +148,7 @@ function loadTunes() {
 
 guitarBtn.addEventListener("click", function () {
   currentMode = "guitar";
+  updateModeClass();
   leaveSetsMode();
   guitarBtn.classList.add("active");
   mandolinBtn.classList.remove("active");
@@ -132,6 +159,7 @@ guitarBtn.addEventListener("click", function () {
 
 mandolinBtn.addEventListener("click", function () {
   currentMode = "mandolin";
+  updateModeClass();
   leaveSetsMode();
   mandolinBtn.classList.add("active");
   guitarBtn.classList.remove("active");
@@ -170,6 +198,7 @@ function updateSetControls() {
   setsBtn.textContent = isSetsMode ? "Repertoire" : "Sets";
   addSetBtn.classList.toggle("hidden", !isSetsMode || isSelectingSet);
   saveSetBtn.classList.toggle("hidden", !isSetsMode || !isSelectingSet);
+  loopControls.classList.toggle("hidden", isSetsMode);
 }
 
 function leaveSetsMode() {
@@ -177,8 +206,10 @@ function leaveSetsMode() {
   isSelectingSet = false;
   selectedSetTuneKeys.clear();
   activeSet = null;
-  clearInterval(setPlaybackTimer);
+  destroySetPlayers();
   setPlaybackPanel.classList.add("hidden");
+  editControls.classList.remove("hidden");
+  tuneDetailsContainer.classList.add("hidden");
   updateSetControls();
 }
 
@@ -298,10 +329,8 @@ youtubePlayerContainer.classList.remove("hidden");
 function playSetLink(tuneIndex, linkIndex) {
   if (!activeSet || !activeSet.tunes[tuneIndex]) return;
 
-  clearInterval(setPlaybackTimer);
   setPlaybackQueue = [activeSet.tunes[tuneIndex].links[linkIndex]];
-  setPlaybackIndex = 0;
-  playCurrentSetQueueItem();
+  startSetPlayback();
 }
 
 function playSelectedSet() {
@@ -316,30 +345,125 @@ function playSelectedSet() {
     return;
   }
 
-  clearInterval(setPlaybackTimer);
-  setPlaybackIndex = 0;
-  playCurrentSetQueueItem();
+  startSetPlayback();
 }
 
-function playCurrentSetQueueItem() {
-  const link = setPlaybackQueue[setPlaybackIndex];
-  if (!link) {
+function destroySetPlayers() {
+  clearInterval(setPlaybackTimer);
+  setPlaybackTimer = null;
+  setPendingTransition = false;
+  setYoutubePlayers.forEach((setPlayer, index) => {
+    if (setPlayer && typeof setPlayer.destroy === "function") setPlayer.destroy();
+    setYoutubePlayers[index] = null;
+    setPlayerReady[index] = false;
+    setPreparedQueueIndexes[index] = -1;
+  });
+  document.getElementById("setYoutubePlayerA").innerHTML = "";
+  document.getElementById("setYoutubePlayerB").innerHTML = "";
+  setYoutubePlayersContainer.classList.add("hidden");
+}
+
+function prepareSetPlayer(playerIndex, queueIndex, autoplay) {
+  const link = setPlaybackQueue[queueIndex];
+  if (!link) return;
+
+  const playerContainer = document.getElementById(playerIndex === 0 ? "setYoutubePlayerA" : "setYoutubePlayerB");
+  if (setYoutubePlayers[playerIndex] && typeof setYoutubePlayers[playerIndex].destroy === "function") {
+    setYoutubePlayers[playerIndex].destroy();
+  }
+  playerContainer.innerHTML = `<div id="setYtPlayer${playerIndex}" class="set-youtube-player-frame"></div>`;
+  setYoutubePlayers[playerIndex] = null;
+  setPlayerReady[playerIndex] = false;
+  setPreparedQueueIndexes[playerIndex] = queueIndex;
+
+  const videoID = getYouTubeVideoID(link.url);
+  if (!videoID) return;
+
+  setYoutubePlayers[playerIndex] = new YT.Player(`setYtPlayer${playerIndex}`, {
+    height: "100%",
+    width: "100%",
+    videoId: videoID,
+    playerVars: { autoplay: 0, playsinline: 1, origin: window.location.origin },
+    events: {
+      onReady: event => {
+        setPlayerReady[playerIndex] = true;
+        event.target.seekTo(Number(link.start) || 0, true);
+        if (autoplay) {
+          event.target.playVideo();
+        } else {
+          event.target.pauseVideo();
+        }
+        if (setPendingTransition && playerIndex !== setActivePlayerIndex) {
+          setPendingTransition = false;
+          advanceSetPlayback();
+        }
+      },
+      onStateChange: event => {
+        if (playerIndex === setActivePlayerIndex && event.data === YT.PlayerState.ENDED) {
+          advanceSetPlayback();
+        }
+      }
+    }
+  });
+}
+
+function watchActiveSetPlayer() {
+  clearInterval(setPlaybackTimer);
+  setPlaybackTimer = setInterval(() => {
+    const player = setYoutubePlayers[setActivePlayerIndex];
+    const link = setPlaybackQueue[setPlaybackIndex];
+    if (!player || !link || typeof player.getCurrentTime !== "function") return;
+
+    const currentTime = player.getCurrentTime();
+    const duration = typeof player.getDuration === "function" ? player.getDuration() : 0;
+    const endTime = link.end === "" || link.end === undefined ? duration : Number(link.end);
+    if (!endTime) return;
+
+    const nextIndex = setPlaybackIndex + 1;
+    const nextPlayerIndex = setActivePlayerIndex === 0 ? 1 : 0;
+    if (
+      nextIndex < setPlaybackQueue.length &&
+      setPreparedQueueIndexes[nextPlayerIndex] !== nextIndex &&
+      endTime - currentTime <= 10
+    ) {
+      prepareSetPlayer(nextPlayerIndex, nextIndex, false);
+    }
+
+    if (currentTime >= endTime) advanceSetPlayback();
+  }, 100);
+}
+
+function advanceSetPlayback() {
+  if (setPendingTransition) return;
+  const nextIndex = setPlaybackIndex + 1;
+  if (nextIndex >= setPlaybackQueue.length) {
     clearInterval(setPlaybackTimer);
     return;
   }
 
-  const videoID = getYouTubeVideoID(link.url);
+  const nextPlayerIndex = setActivePlayerIndex === 0 ? 1 : 0;
+  if (!setPlayerReady[nextPlayerIndex]) {
+    setPendingTransition = true;
+    clearInterval(setPlaybackTimer);
+    return;
+  }
+
+  setActivePlayerIndex = nextPlayerIndex;
+  setPlaybackIndex = nextIndex;
+  setYoutubePlayers[setActivePlayerIndex].playVideo();
+  watchActiveSetPlayer();
+}
+
+function startSetPlayback() {
+  if (setPlaybackQueue.length === 0) return;
+
+  destroySetPlayers();
+  setPlaybackIndex = 0;
+  setActivePlayerIndex = 0;
+  setYoutubePlayersContainer.classList.remove("hidden");
   loadYouTubeAPI(() => {
-    createYouTubePlayer(videoID, Number(link.start) || 0, true, () => {
-      clearInterval(setPlaybackTimer);
-      setPlaybackTimer = setInterval(() => {
-        if (!youtubePlayer || link.end === "" || link.end === undefined) return;
-        if (youtubePlayer.getCurrentTime() >= Number(link.end)) {
-          setPlaybackIndex += 1;
-          playCurrentSetQueueItem();
-        }
-      }, 200);
-    });
+    prepareSetPlayer(0, 0, true);
+    watchActiveSetPlayer();
   });
 }
 
@@ -659,7 +783,27 @@ function renderSets(sets) {
       const set = { ...savedSet, key: setKey };
       const setItem = document.createElement("div");
       setItem.className = "sets-content";
-      setItem.textContent = set.name || (set.tunes || []).map(tune => typeof tune === "object" ? tune.name : tune).join(", ");
+      setItem.dataset.setKey = set.key;
+
+      const setName = document.createElement("span");
+      setName.className = "set-name";
+      setName.textContent = set.name || (set.tunes || []).map(tune => typeof tune === "object" ? tune.name : tune).join(", ");
+      setItem.appendChild(setName);
+
+      const playSetButton = document.createElement("button");
+      playSetButton.className = "set-play-button";
+      playSetButton.type = "button";
+      playSetButton.textContent = "▶";
+      playSetButton.title = "Play set from the start";
+      playSetButton.addEventListener("click", function (event) {
+        event.stopPropagation();
+        database.ref("tunes/" + currentMode).once("value", function (snapshot) {
+          renderSetPlayback(set, snapshot.val() || {});
+          playSelectedSet();
+        });
+      });
+      setItem.appendChild(playSetButton);
+
       setItem.addEventListener("click", function () {
         database.ref("tunes/" + currentMode).once("value", function (snapshot) {
           renderSetPlayback(set, snapshot.val() || {});
@@ -768,6 +912,7 @@ function getSetTunes(set, repertoire) {
 }
 
 function renderSetPlayback(set, repertoire) {
+  destroySetPlayers();
   clearInterval(setPlaybackTimer);
   if (youtubePlayer && typeof youtubePlayer.destroy === "function") {
     youtubePlayer.destroy();
@@ -782,16 +927,55 @@ function renderSetPlayback(set, repertoire) {
   setPlaybackPanel.innerHTML = "";
   setPlaybackPanel.classList.remove("hidden");
   tuneDetailsContainer.classList.remove("hidden");
+  setYoutubePlayersContainer.classList.remove("hidden");
+  editControls.classList.add("hidden");
+  detailsControls.classList.add("hidden");
   detailsDisplay.classList.add("hidden");
 
-  const title = document.createElement("h3");
-  title.textContent = "Set playback";
-  setPlaybackPanel.appendChild(title);
+  const defaultSetName = set.name || activeSet.tunes.map(tune => tune.name).filter(Boolean).join(", ");
+  set.name = defaultSetName;
+  const setActions = document.createElement("div");
+  setActions.className = "set-playback-actions";
 
+  const renameSetButton = document.createElement("button");
+  renameSetButton.type = "button";
+  renameSetButton.textContent = "Rename";
+
+  const setNameInput = document.createElement("input");
+  setNameInput.type = "text";
+  setNameInput.className = "set-name-input";
+  setNameInput.classList.add("hidden");
+  setNameInput.value = defaultSetName;
+  setNameInput.placeholder = "Set name";
+  renameSetButton.addEventListener("click", function () {
+    renameSetButton.classList.add("hidden");
+    setNameInput.classList.remove("hidden");
+    setNameInput.focus();
+  });
+  setNameInput.addEventListener("blur", function () {
+    setNameInput.classList.add("hidden");
+    renameSetButton.classList.remove("hidden");
+  });
+  setNameInput.addEventListener("input", function () {
+    set.name = setNameInput.value;
+    if (set.key) {
+      database.ref(`sets/${currentMode}/${set.key}/name`).set(set.name);
+    }
+    document.querySelectorAll(".sets-content").forEach(setItem => {
+      if (setItem.dataset.setKey === set.key) {
+        const setName = setItem.querySelector(".set-name");
+        if (setName) setName.textContent = set.name;
+      }
+    });
+  });
   const playSetButton = document.createElement("button");
+  playSetButton.type = "button";
   playSetButton.textContent = "Play set";
   playSetButton.addEventListener("click", playSelectedSet);
-  setPlaybackPanel.appendChild(playSetButton);
+  setActions.appendChild(renameSetButton);
+  setActions.appendChild(setNameInput);
+  setActions.appendChild(playSetButton);
+  setPlaybackPanel.appendChild(setActions);
 
   activeSet.tunes.forEach((tune, tuneIndex) => {
     const tuneBlock = document.createElement("div");
@@ -820,17 +1004,51 @@ function renderSetPlayback(set, repertoire) {
     setPlaybackPanel.appendChild(tuneBlock);
   });
 
-  const saveButton = document.createElement("button");
-  saveButton.textContent = "Save set timings";
-  saveButton.addEventListener("click", function () {
-    if (!set.key) {
-      alert("This set has no Firebase key.");
-      return;
-    }
-    database.ref(`sets/${currentMode}/${set.key}`).update({ tunes: activeSet.tunes });
-  });
-  setPlaybackPanel.appendChild(saveButton);
+}
 
+function formatSetTime(seconds) {
+  if (seconds === "" || seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "";
+  const totalSeconds = Number(seconds);
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds - minutes * 60;
+  const displaySeconds = Number.isInteger(remainingSeconds) ? String(remainingSeconds) : remainingSeconds.toFixed(1).replace(/\.0$/, "");
+  return `${minutes}:${displaySeconds.padStart(2, "0")}`;
+}
+
+function parseSetTime(value) {
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return "";
+  if (trimmedValue.includes(":")) {
+    const parts = trimmedValue.split(":");
+    if (parts.length !== 2) return NaN;
+    const minutes = Number(parts[0]);
+    const seconds = Number(parts[1]);
+    return Number.isFinite(minutes) && Number.isFinite(seconds) ? minutes * 60 + seconds : NaN;
+  }
+  return Number(trimmedValue);
+}
+
+function setupSetTimeInput(input, getValue, setValue) {
+  input.type = "text";
+  input.inputMode = "decimal";
+  input.addEventListener("focus", () => {
+    input.value = formatSetTime(getValue());
+  });
+  input.addEventListener("input", () => {
+    const seconds = parseSetTime(input.value);
+    if (seconds !== "" && Number.isFinite(seconds)) {
+      setValue(seconds);
+      syncSetSelections();
+    }
+  });
+  input.addEventListener("blur", () => {
+    const seconds = parseSetTime(input.value);
+    if (seconds === "" || Number.isFinite(seconds)) {
+      setValue(seconds);
+      input.value = seconds === "" ? "" : String(seconds);
+      syncSetSelections();
+    }
+  });
 }
 
 function createSetLinkRow(tuneIndex, linkIndex, link) {
@@ -842,7 +1060,10 @@ function createSetLinkRow(tuneIndex, linkIndex, link) {
   urlInput.type = "url";
   urlInput.placeholder = "YouTube link";
   urlInput.value = link.url || "";
-  urlInput.addEventListener("change", () => { activeSet.tunes[tuneIndex].links[linkIndex].url = urlInput.value.trim(); });
+  urlInput.addEventListener("input", () => {
+    activeSet.tunes[tuneIndex].links[linkIndex].url = urlInput.value.trim();
+    syncSetSelections();
+  });
 
   const selectInput = document.createElement("input");
   selectInput.type = "checkbox";
@@ -864,20 +1085,24 @@ function createSetLinkRow(tuneIndex, linkIndex, link) {
   });
 
   const startInput = document.createElement("input");
-  startInput.type = "number";
-  startInput.min = "0";
-  startInput.step = "0.1";
+  startInput.className = "set-time-input";
   startInput.placeholder = "Start (s)";
-  startInput.value = link.start || 0;
-  startInput.addEventListener("change", () => { activeSet.tunes[tuneIndex].links[linkIndex].start = Number(startInput.value) || 0; });
+  startInput.value = String(link.start || 0);
+  setupSetTimeInput(
+    startInput,
+    () => activeSet.tunes[tuneIndex].links[linkIndex].start,
+    seconds => { activeSet.tunes[tuneIndex].links[linkIndex].start = seconds === "" ? 0 : seconds; }
+  );
 
   const endInput = document.createElement("input");
-  endInput.type = "number";
-  endInput.min = "0";
-  endInput.step = "0.1";
-  endInput.placeholder = "End (s)";
-  endInput.value = link.end;
-  endInput.addEventListener("change", () => { activeSet.tunes[tuneIndex].links[linkIndex].end = endInput.value === "" ? "" : Number(endInput.value) || 0; });
+  endInput.className = "set-time-input";
+  endInput.placeholder = "End";
+  endInput.value = link.end === "" ? "" : String(link.end);
+  setupSetTimeInput(
+    endInput,
+    () => activeSet.tunes[tuneIndex].links[linkIndex].end,
+    seconds => { activeSet.tunes[tuneIndex].links[linkIndex].end = seconds; }
+  );
 
   const playButton = document.createElement("button");
   playButton.textContent = "Play";
@@ -950,7 +1175,7 @@ function createTuneItem(key, tune) {
 
     selectedTuneKey = key;
     activeSet = null;
-    clearInterval(setPlaybackTimer);
+    destroySetPlayers();
     setPlaybackPanel.classList.add("hidden");
     document.getElementById("chordDiagramsContainer").innerHTML = "";
 
@@ -966,9 +1191,9 @@ function createTuneItem(key, tune) {
     tuneDetailsText.value = tune.details || "";
     detailsDisplay.textContent = tune.details || "";
     tuneDetailsText.classList.add("hidden");
-    detailsDisplay.classList.remove("hidden");
-    editDetailsBtn.classList.remove("hidden");
     saveDetailsBtn.classList.add("hidden");
+    updateDetailsDisplay();
+    editDetailsBtn.classList.remove("hidden");
     tuneDetailsContainer.classList.remove("hidden");
 
     // Show/hide main link button
@@ -1071,6 +1296,7 @@ editDetailsBtn.addEventListener("click", function () {
   editKnowledgeInput.classList.remove("hidden");
 
   detailsDisplay.classList.add("hidden");
+  detailsControls.classList.add("hidden");
   editDetailsBtn.classList.add("hidden");
   saveDetailsBtn.classList.remove("hidden");
 
@@ -1093,7 +1319,6 @@ addRepertoireLinkBtn.addEventListener("click", function () {
 });
 
 function finishEditingTune() {
-  detailsDisplay.classList.remove("hidden");
   editDetailsBtn.classList.remove("hidden");
   saveDetailsBtn.classList.add("hidden");
   tuneDetailsText.classList.add("hidden");
@@ -1105,6 +1330,7 @@ function finishEditingTune() {
   keyInput.classList.add("hidden");
   typeInput.classList.add("hidden");
   editKnowledgeInput.classList.add("hidden");
+  updateDetailsDisplay();
 }
 
 function saveEditedTune(onComplete) {

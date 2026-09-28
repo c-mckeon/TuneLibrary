@@ -71,6 +71,10 @@
     display: block;
     min-height: 800px; /* or use min-height if you want it flexible */
   }
+
+  body.mandolin-mode textarea#tuneDetails {
+    min-height: 400px;
+  }
   
 
   p {
@@ -85,6 +89,15 @@
     scroll-behavior: smooth;
     max-height: 500px; /* or whatever height you want */
   }
+
+.details-controls {
+  margin: 20px auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
   
 
 
@@ -152,10 +165,24 @@
   background-color: #fafafa;
   border-bottom: 1px solid #eee;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .sets-content:hover {
   background-color: #e8e8e8;
+}
+
+.set-name {
+  flex: 1 1 auto;
+}
+
+.set-play-button {
+  width: 28px;
+  min-width: 28px;
+  padding: 3px 0;
 }
 
 #setPlaybackPanel {
@@ -165,8 +192,35 @@
   text-align: left;
 }
 
-#setPlaybackPanel h3 {
+#setPlaybackPanel .set-name-input {
+  width: 180px;
+  box-sizing: border-box;
+}
+
+.set-playback-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
   margin-bottom: 10px;
+}
+
+.set-youtube-players {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.set-youtube-player {
+  flex: 1 1 0;
+  aspect-ratio: 16 / 9;
+  min-width: 0;
+}
+
+.set-youtube-player-frame,
+.set-youtube-player iframe {
+  width: 100%;
+  height: 100%;
 }
 
 .set-tune-block {
@@ -232,6 +286,15 @@
 .repertoire-link-row button {
   flex: 0 0 auto;
 }
+
+.edit-controls {
+  margin: 10px auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
   
 #youtubeControls button,
 #youtubeControls input {
@@ -248,12 +311,14 @@
   font-size: 11px;
 }
 
-#youtubeControls input[type="number"] {
+input[type="number"] {
+  -webkit-appearance: none;
   -moz-appearance: textfield;
+  appearance: textfield;
 }
 
-#youtubeControls input[type="number"]::-webkit-inner-spin-button,
-#youtubeControls input[type="number"]::-webkit-outer-spin-button {
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
   margin: 0;
   -webkit-appearance: none;
 }

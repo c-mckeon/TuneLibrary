@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tune Library</title>
   <!-- Link to external CSS -->
-  <link rel="stylesheet" type="text/css" href="style.css">
+  <link rel="stylesheet" type="text/css" href="style.css?v=9">
   <!-- Firebase App (the core Firebase SDK) -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <!-- Firebase Database -->
@@ -45,8 +45,12 @@
 <!-- Tune Details (Appears on clicking a tune) -->
 <div class="tune-details hidden" id="tuneDetailsContainer">
 
-    
-   
+<div id="editControls" class="edit-controls">
+  <button id="editDetailsBtn">Edit</button>
+  <button id="saveDetails" class="hidden">Save</button>
+  <button id="clicklink" class="hidden">Link</button>
+</div>
+
 <div id="youtubeControls" class="player-controls">
   <div class="player-control-group">
     <button id="playPauseBtn" >⏵︎</button>
@@ -64,7 +68,7 @@
         <input id="cueInput" type="number" step="0.1" style="width: 50px;" /> 
   </div>
 
-  <div class="player-control-group">
+  <div id="loopControls" class="player-control-group">
     <button id="loopBtn">Loop</button>
     <input id="loopInputstart" type="number" step="0.1" placeholder="⏵︎" style="width: 45px;" />
     <input id="loopInputend" type="number" step="0.1" placeholder="⏴︎" style="width: 45px;" />
@@ -74,38 +78,41 @@
 
  
     <div id="youtubePlayerContainer" class="hidden" style="margin-top: 10px; width: 100%; height: 0; padding-bottom: 56.25%; position: relative;"></div>
+    <div id="setYoutubePlayers" class="set-youtube-players hidden">
+      <div id="setYoutubePlayerA" class="set-youtube-player"></div>
+      <div id="setYoutubePlayerB" class="set-youtube-player"></div>
+    </div>
 
     <div id="setPlaybackPanel" class="hidden"></div>
-
     <div id="detailsDisplay"></div>
-    <div id=youtubeControls style="margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center;justify-content: center; 
-gap: 10px;">
+    <div id="detailsControls" class="details-controls">
         <button id="scrollToTopBtn">&larr;</button>
         <button id="startScrollBtn">Start Scroll</button>
         <button id="stopScrollBtn" disabled>Stop Scroll</button>
         <label for="scrollSpeed">Speed:</label>
         <input type="range" id="scrollSpeed" min="1" max="10" value="5">
-        <button id="editDetailsBtn">Edit</button>
-        <button id="saveDetails" class="hidden">Save</button>
-        <button id="clicklink"  class="hidden">Link</button>
     </div>
 
 
+
+
     <!-- Tune Details Textarea -->
-    <textarea id="tuneDetails" class="hidden" rows="20" cols="60"></textarea>
+    
     <div id="chordDiagramsContainer"  class="hidden"></div>
 
     <!-- Chord Input Box -->
-    <input type="text" id="chordInput" class="hidden" style="width: 570px;"  rows="20" cols="1"placeholder="Chords "> 
+   
 <!-- Additional Edit Fields -->
-<input type="text" id="nameInput" class="hidden" style="width: 570px;" placeholder="Name">
-<input type="text" id="linkInput" class="hidden" style="width: 570px;" placeholder="Link">
-<div id="repertoireLinksEditor" class="hidden"></div>
-<button id="addRepertoireLinkBtn" class="hidden">Add link</button>
-<input type="text" id="keyInput" class="hidden" style="width: 570px;" placeholder="Key">
-<input type="text" id="typeInput" class="hidden" style="width: 570px;" placeholder="Type">
-<input type="number" id="knowledgeInput" class="hidden" style="width: 570px;" placeholder="Knowledge (1-5)"> <br>
 
+ <div id="repertoireLinksEditor" class="hidden"></div>
+<button id="addRepertoireLinkBtn" class="hidden">Add link</button><br> 
+  <input type="text" id="nameInput" class="hidden" style="width: 190px;" placeholder="Name"><br>
+  <input type="text" id="chordInput" class="hidden" style="width: 190px;"  rows="20" cols="1"placeholder="Chords ">
+  <input type="text" id="linkInput" class="hidden" style="width: 570px;" placeholder="Link"><br>
+  <input type="text" id="keyInput" class="hidden" style="width: 190px;" placeholder="Key"><br>
+  <input type="text" id="typeInput" class="hidden" style="width: 190px;" placeholder="Type"><br>
+  <input type="number" id="knowledgeInput" class="hidden" style="width: 190px;" placeholder="Knowledge (1-5)"> <br>
+<textarea id="tuneDetails" class="hidden" rows="20" cols="60"></textarea>
 </div>
 
     <br>
@@ -124,7 +131,7 @@ gap: 10px;">
   
   
   <!-- Link to external JavaScript file -->
-  <script src="script.js"></script>
+  <script src="script.js?v=11"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
 
 </body>
