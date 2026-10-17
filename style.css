@@ -235,8 +235,55 @@ textarea {
 #tuneName {
   width: 200px;
 }
-#repertoireOnlyBtn {
-  margin-left: auto; /* right-aligned on the toolbar */
+/* "Show In-Progress" switch, right-aligned on the toolbar */
+.switch {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--control-h);
+  cursor: pointer;
+  user-select: none;
+  color: var(--text);
+}
+.switch-label {
+  order: -1; /* text on the left of the switch */
+}
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-track {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: #d5d9de;
+  transition: background-color 0.2s ease;
+}
+.switch-track::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.25);
+  transition: transform 0.2s ease;
+}
+.switch input:checked + .switch-track {
+  background: #c9a982; /* light brown */
+}
+.switch input:checked + .switch-track::after {
+  transform: translateX(14px);
+}
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---------- Tune list ---------- */
@@ -270,6 +317,26 @@ textarea {
 .level-4-header:hover {
   cursor: default;
   background: transparent;
+}
+/* Section header tints: Repertoire and Outdated grey-green, Next up grey-red */
+.knowledge-section.level-4 .knowledge-header,
+.knowledge-section.level-3 .knowledge-header {
+  background: #f3faf4;
+}
+.knowledge-section.level-4 .knowledge-header:hover,
+.knowledge-section.level-3 .knowledge-header:hover {
+  background: #e9f4eb;
+}
+.knowledge-section.level-1 .knowledge-header {
+  background: #fdf3f3;
+}
+.knowledge-section.level-1 .knowledge-header:hover {
+  background: #f8e7e7;
+}
+.knowledge-section.level-4 .header-count,
+.knowledge-section.level-3 .header-count,
+.knowledge-section.level-1 .header-count {
+  background: rgba(255, 255, 255, 0.8);
 }
 .knowledge-section.collapsed .knowledge-header {
   border-bottom: none;

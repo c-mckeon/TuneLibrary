@@ -96,7 +96,8 @@ const knowledgeHeaders = {
 const expandedKnowledgeLevels = {
   1: false,
   2: false,
-  3: false
+  3: false,
+  4: true
 };
 const sortBtn = document.getElementById("sortbtn");
 
@@ -331,17 +332,16 @@ function updateSetControls() {
   // Loop is for single tunes; Edit stays (in a set it shows/hides the set editor)
   document.getElementById("loopBtn").classList.toggle("hidden", isSetsMode);
   document.getElementById("loopFields").classList.toggle("hidden", isSetsMode);
-  repertoireOnlyBtn.classList.toggle("hidden", isSetsMode);
+  showInProgressToggle.classList.toggle("hidden", isSetsMode);
 }
 
-// "Repertoire only" (on by default) hides the Outdated and Next up sections
+// "Show In-Progress" switch (off by default): when off, only Repertoire is shown
 let repertoireOnly = true;
-const repertoireOnlyBtn = document.getElementById("repertoireOnlyBtn");
+const showInProgressToggle = document.getElementById("showInProgressToggle");
+const showInProgressInput = document.getElementById("showInProgressInput");
 
-repertoireOnlyBtn.addEventListener("click", function () {
-  repertoireOnly = !repertoireOnly;
-  repertoireOnlyBtn.classList.toggle("active", repertoireOnly);
-  repertoireOnlyBtn.setAttribute("aria-pressed", repertoireOnly ? "true" : "false");
+showInProgressInput.addEventListener("change", function () {
+  repertoireOnly = !showInProgressInput.checked;
   loadTunes();
 });
 
@@ -935,31 +935,12 @@ function renderTuneList(tunes) {
   });
 
   // 4) Render grouped tunes
-  // Level 4 first (always expanded)
-  if (groupedTunes[4].length > 0) {
-    const section = document.createElement("div");
-    section.className = "knowledge-section level-4";
-
-    const header = document.createElement("div");
-    header.className = "knowledge-header level-4-header";
-    header.innerHTML = `<span class="header-label">${knowledgeHeaders[4]}</span><span class="header-count">${groupedTunes[4].length}</span>`;
-
-    section.appendChild(header);
-
-    groupedTunes[4].forEach(([key, tune]) => {
-      const tuneItem = createTuneItem(key, tune);
-      section.appendChild(tuneItem);
-    });
-
-    tuneListDiv.appendChild(section);
-  }
-
   if (repertoireOnly && groupedTunes[4].length === 0) {
-    tuneListDiv.textContent = "No repertoire tunes yet. Turn off \"Repertoire only\" to see the rest.";
+    tuneListDiv.textContent = "No repertoire tunes yet. Turn on \"Show In-Progress\" to see the rest.";
   }
 
-  // Levels 1-3: collapsible sections in descending order (hidden in "Repertoire only")
-  for (let level = 3; level >= 1 && !repertoireOnly; level--) {
+  // Collapsible sections, Repertoire first (levels 1-3 shown only with "Show In-Progress")
+  for (let level = 4; level >= 1 && (level === 4 || !repertoireOnly); level--) {
     if (groupedTunes[level].length > 0) {
       const section = document.createElement("div");
       const isExpanded = expandedKnowledgeLevels[level];

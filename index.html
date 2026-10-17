@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tune Library</title>
   <!-- Link to external CSS -->
-  <link rel="stylesheet" type="text/css" href="style.css?v=38">
+  <link rel="stylesheet" type="text/css" href="style.css?v=45">
   <!-- Firebase App (the core Firebase SDK) -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <!-- Firebase Database -->
@@ -38,7 +38,11 @@
       <button id="setsBtn">Sets</button>
       <button id="addSetBtn" class="hidden">Add set</button>
       <button id="saveSetBtn" class="hidden">Save set</button>
-      <button id="repertoireOnlyBtn" class="active" aria-pressed="true" title="Hide Outdated and Next up">Repertoire only</button>
+      <label id="showInProgressToggle" class="switch" title="Show the Outdated and Next up sections">
+        <input type="checkbox" id="showInProgressInput">
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">Show In-Progress</span>
+      </label>
       
     </div>
     
@@ -139,7 +143,7 @@
   
   
   <!-- Link to external JavaScript file -->
-  <script src="script.js?v=33"></script>
+  <script src="script.js?v=35"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
 
 </body>
