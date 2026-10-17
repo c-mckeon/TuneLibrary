@@ -23,9 +23,14 @@ var setPlaybackIndex = -1;
 var setPlaybackTimer = null;
 var setYoutubePlayers = [null, null];
 var setPlayerReady = [false, false];
-var setPreparedQueueIndexes = [-1, -1];
+var setPreparedQueueIndexes = [-1, -1]; // which queue entry each player has loaded
+var setPrimeStage = ["", ""];           // "" | "loading" (muted, waiting to play) | "pausing" (waiting to pause)
+var setPrimed = [false, false];         // buffered and paused at the tune's start, ready to go
 var setActivePlayerIndex = 0;
-var setPendingTransition = false;
+var setWaitingForNext = false;          // reached the end before the next tune was loaded
+var setOutgoingPauseTimer = null;
+var setPrimeTimer = null;
+var setSessionToken = 0;                // bumps on every restart so stale callbacks are ignored
 var editingTuneLinks = [];
 
 // DOM Elements
@@ -49,7 +54,7 @@ const typeInput = document.getElementById("typeInput");
 const editKnowledgeInput = document.getElementById("knowledgeInput");
 const repertoireLinksEditor = document.getElementById("repertoireLinksEditor");
 const addRepertoireLinkBtn = document.getElementById("addRepertoireLinkBtn");
-var clickLinkBtn = document.getElementById("clicklink");
+var selectedTuneUrl = "";
 const youtubePlayerContainer = document.getElementById("youtubePlayerContainer");
 const setYoutubePlayersContainer = document.getElementById("setYoutubePlayers");
 const setPlaybackPanel = document.getElementById("setPlaybackPanel");
@@ -81,7 +86,7 @@ guitarBtn.classList.remove("active");
 updateModeClass();
 
 
-let currentSortMode = 0; // 0=knowledge, 1=name, 2=type
+let currentSortMode = 0; // 0=name, 1=type
 const knowledgeHeaders = {
   1: "Next up",
   2: "In progress",
@@ -95,9 +100,11 @@ const expandedKnowledgeLevels = {
 };
 const sortBtn = document.getElementById("sortbtn");
 
+sortBtn.title = "Sorted by name";
+
 sortBtn.addEventListener("click", () => {
-  currentSortMode = (currentSortMode + 1) % 3; // cycle 0->1->2->0
-  console.log("Sort mode changed to", currentSortMode);
+  currentSortMode = (currentSortMode + 1) % 2; // toggle name <-> type
+  sortBtn.title = currentSortMode === 0 ? "Sorted by name" : "Sorted by type";
   loadTunes(); // reload tunes with new sorting
 });
 
@@ -235,9 +242,9 @@ firebase.auth().onAuthStateChanged(function (user) {
 // Show connection state on the refresh button
 database.ref(".info/connected").on("value", function (snapshot) {
   if (snapshot.val() === true) {
-    refreshBtn.style.backgroundColor = "";
+    refreshBtn.classList.remove("error");
   } else if (tunesLoaded) {
-    refreshBtn.style.backgroundColor = "#f5b3c2";
+    refreshBtn.classList.add("error");
   }
 });
 
@@ -264,9 +271,37 @@ mandolinBtn.addEventListener("click", function () {
   subscribeToMode();
 });
 
+// + button slides the new-tune fields in and out
+const newTuneBtn = document.getElementById("newTuneBtn");
+const newTuneFields = document.getElementById("newTuneFields");
+
+function setNewTuneOpen(open) {
+  newTuneFields.classList.toggle("open", open);
+  newTuneBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  newTuneBtn.title = open ? "Close" : "Add a tune";
+  if (open) {
+    tuneNameInput.focus();
+  } else {
+    tuneNameInput.value = "";
+  }
+}
+
+newTuneBtn.addEventListener("click", function () {
+  setNewTuneOpen(!newTuneFields.classList.contains("open"));
+});
+
+tuneNameInput.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") saveTuneBtn.click();
+  if (e.key === "Escape") setNewTuneOpen(false);
+});
+
 // Save a new tune
 saveTuneBtn.addEventListener("click", function () {
   var tuneName = tuneNameInput.value.trim();
+  if (!tuneName) {
+    tuneNameInput.focus();
+    return;
+  }
   var newTune = {
     name: tuneName,
     details: "",
@@ -276,7 +311,7 @@ saveTuneBtn.addEventListener("click", function () {
     if (error) {
       reportWriteError(error);
     } else {
-      tuneNameInput.value = "";
+      setNewTuneOpen(false);
     }
   });
 });
@@ -293,8 +328,22 @@ function updateSetControls() {
   setsBtn.textContent = isSetsMode ? "Repertoire" : "Sets";
   addSetBtn.classList.toggle("hidden", !isSetsMode || isSelectingSet);
   saveSetBtn.classList.toggle("hidden", !isSetsMode || !isSelectingSet);
-  loopControls.classList.toggle("hidden", isSetsMode);
+  // Loop is for single tunes; Edit stays (in a set it shows/hides the set editor)
+  document.getElementById("loopBtn").classList.toggle("hidden", isSetsMode);
+  document.getElementById("loopFields").classList.toggle("hidden", isSetsMode);
+  repertoireOnlyBtn.classList.toggle("hidden", isSetsMode);
 }
+
+// "Repertoire only" (on by default) hides the Outdated and Next up sections
+let repertoireOnly = true;
+const repertoireOnlyBtn = document.getElementById("repertoireOnlyBtn");
+
+repertoireOnlyBtn.addEventListener("click", function () {
+  repertoireOnly = !repertoireOnly;
+  repertoireOnlyBtn.classList.toggle("active", repertoireOnly);
+  repertoireOnlyBtn.setAttribute("aria-pressed", repertoireOnly ? "true" : "false");
+  loadTunes();
+});
 
 function leaveSetsMode() {
   isSetsMode = false;
@@ -303,7 +352,7 @@ function leaveSetsMode() {
   activeSet = null;
   destroySetPlayers();
   setPlaybackPanel.classList.add("hidden");
-  editControls.classList.remove("hidden");
+  setEditorButtonState(false);
   tuneDetailsContainer.classList.add("hidden");
   updateSetControls();
 }
@@ -412,6 +461,7 @@ youtubePlayerContainer.classList.remove("hidden");
         youtubePlayer.seekTo(cueTime, true);
         if (autoplay) youtubePlayer.playVideo();
         document.getElementById("cueInput").value = currentCue;
+        markActiveSpeed(1);
         if (onReadyCallback) onReadyCallback();
       },
       onStateChange: onPlayerStateChange // Listen to state changes
@@ -441,123 +491,232 @@ function playSelectedSet() {
   startSetPlayback();
 }
 
+// ---------- Set playback: two players that hand off gaplessly ----------
+// Both players are created once, before the first tune starts, so no YouTube player ever boots
+// while music is playing (booting one makes the playing video stutter). While a tune plays, the
+// idle player is "primed" with the next one: loaded muted, allowed to actually start (so it
+// buffers), then paused at the tune's start. At the handoff the primed player is unmuted and
+// started a moment early to cover YouTube's start-up delay, and the outgoing player is paused
+// exactly at its end point.
+const SET_HANDOFF_LEAD = 0.15; // seconds (real time) to start the next tune before this one ends
+const SET_PRIME_DELAY = 1500;  // ms to wait after a tune starts/ends before priming the next one
+
+function setLinkStart(link) {
+  return Number(link.start) || 0;
+}
+
+// End point in video seconds: the link's end, or the end of the video
+function setLinkEnd(player, link) {
+  if (link.end === "" || link.end === undefined) {
+    return typeof player.getDuration === "function" ? player.getDuration() : 0;
+  }
+  return Number(link.end);
+}
+
+// Real seconds until the player reaches the link's end point, allowing for playback speed
+function setRemainingSeconds(player, link) {
+  const end = setLinkEnd(player, link);
+  if (!end || typeof player.getCurrentTime !== "function") return Infinity;
+  const rate = (typeof player.getPlaybackRate === "function" && player.getPlaybackRate()) || 1;
+  return Math.max(0, (end - player.getCurrentTime()) / rate);
+}
+
 function destroySetPlayers() {
+  setSessionToken++;
   clearInterval(setPlaybackTimer);
+  clearTimeout(setOutgoingPauseTimer);
+  clearTimeout(setPrimeTimer);
   setPlaybackTimer = null;
-  setPendingTransition = false;
+  setWaitingForNext = false;
   setYoutubePlayers.forEach((setPlayer, index) => {
     if (setPlayer && typeof setPlayer.destroy === "function") setPlayer.destroy();
     setYoutubePlayers[index] = null;
     setPlayerReady[index] = false;
     setPreparedQueueIndexes[index] = -1;
+    setPrimeStage[index] = "";
+    setPrimed[index] = false;
   });
   document.getElementById("setYoutubePlayerA").innerHTML = "";
   document.getElementById("setYoutubePlayerB").innerHTML = "";
   setYoutubePlayersContainer.classList.add("hidden");
+  document.getElementById("playPauseBtn").textContent = "⏵︎";
 }
 
-function prepareSetPlayer(playerIndex, queueIndex, autoplay) {
-  const link = setPlaybackQueue[queueIndex];
-  if (!link) return;
-
-  const playerContainer = document.getElementById(playerIndex === 0 ? "setYoutubePlayerA" : "setYoutubePlayerB");
-  if (setYoutubePlayers[playerIndex] && typeof setYoutubePlayers[playerIndex].destroy === "function") {
-    setYoutubePlayers[playerIndex].destroy();
-  }
-  playerContainer.innerHTML = `<div id="setYtPlayer${playerIndex}" class="set-youtube-player-frame"></div>`;
-  setYoutubePlayers[playerIndex] = null;
-  setPlayerReady[playerIndex] = false;
-  setPreparedQueueIndexes[playerIndex] = queueIndex;
-
-  const videoID = getYouTubeVideoID(link.url);
-  if (!videoID) return;
+function createSetPlayer(playerIndex, queueIndex, onReady) {
+  const container = document.getElementById(playerIndex === 0 ? "setYoutubePlayerA" : "setYoutubePlayerB");
+  container.innerHTML = `<div id="setYtPlayer${playerIndex}" class="set-youtube-player-frame"></div>`;
 
   setYoutubePlayers[playerIndex] = new YT.Player(`setYtPlayer${playerIndex}`, {
     height: "100%",
     width: "100%",
-    videoId: videoID,
-    playerVars: { autoplay: 0, playsinline: 1, origin: window.location.origin },
+    videoId: getYouTubeVideoID(setPlaybackQueue[queueIndex].url), // cued only; nothing plays yet
+    playerVars: { autoplay: 0, playsinline: 1, rel: 0, origin: window.location.origin },
     events: {
-      onReady: event => {
+      onReady: () => {
         setPlayerReady[playerIndex] = true;
-        event.target.seekTo(Number(link.start) || 0, true);
-        if (autoplay) {
-          event.target.playVideo();
-        } else {
-          event.target.pauseVideo();
-        }
-        if (setPendingTransition && playerIndex !== setActivePlayerIndex) {
-          setPendingTransition = false;
-          advanceSetPlayback();
-        }
+        onReady();
       },
-      onStateChange: event => {
-        if (playerIndex === setActivePlayerIndex && event.data === YT.PlayerState.ENDED) {
-          advanceSetPlayback();
-        }
+      onStateChange: event => handleSetPlayerState(playerIndex, event),
+      onError: event => {
+        console.warn("Set player", playerIndex, "error", event.data);
+        if (playerIndex === setActivePlayerIndex) handOffToNextSetTune();
       }
     }
   });
-}
-
-function watchActiveSetPlayer() {
-  clearInterval(setPlaybackTimer);
-  setPlaybackTimer = setInterval(() => {
-    const player = setYoutubePlayers[setActivePlayerIndex];
-    const link = setPlaybackQueue[setPlaybackIndex];
-    if (!player || !link || typeof player.getCurrentTime !== "function") return;
-
-    const currentTime = player.getCurrentTime();
-    const duration = typeof player.getDuration === "function" ? player.getDuration() : 0;
-    const endTime = link.end === "" || link.end === undefined ? duration : Number(link.end);
-    if (!endTime) return;
-
-    const nextIndex = setPlaybackIndex + 1;
-    const nextPlayerIndex = setActivePlayerIndex === 0 ? 1 : 0;
-    if (
-      nextIndex < setPlaybackQueue.length &&
-      setPreparedQueueIndexes[nextPlayerIndex] !== nextIndex &&
-      endTime - currentTime <= 10
-    ) {
-      prepareSetPlayer(nextPlayerIndex, nextIndex, false);
-    }
-
-    if (currentTime >= endTime) advanceSetPlayback();
-  }, 100);
-}
-
-function advanceSetPlayback() {
-  if (setPendingTransition) return;
-  const nextIndex = setPlaybackIndex + 1;
-  if (nextIndex >= setPlaybackQueue.length) {
-    clearInterval(setPlaybackTimer);
-    return;
-  }
-
-  const nextPlayerIndex = setActivePlayerIndex === 0 ? 1 : 0;
-  if (!setPlayerReady[nextPlayerIndex]) {
-    setPendingTransition = true;
-    clearInterval(setPlaybackTimer);
-    return;
-  }
-
-  setActivePlayerIndex = nextPlayerIndex;
-  setPlaybackIndex = nextIndex;
-  setYoutubePlayers[setActivePlayerIndex].playVideo();
-  watchActiveSetPlayer();
 }
 
 function startSetPlayback() {
   if (setPlaybackQueue.length === 0) return;
 
   destroySetPlayers();
+  const token = setSessionToken;
   setPlaybackIndex = 0;
   setActivePlayerIndex = 0;
   setYoutubePlayersContainer.classList.remove("hidden");
+
   loadYouTubeAPI(() => {
-    prepareSetPlayer(0, 0, true);
-    watchActiveSetPlayer();
+    if (token !== setSessionToken) return;
+    const playersNeeded = setPlaybackQueue.length > 1 ? 2 : 1;
+    let readyCount = 0;
+    let started = false;
+    const begin = () => {
+      if (started || token !== setSessionToken) return;
+      started = true;
+      startFirstSetTune();
+    };
+
+    // Boot both players up front, then start; give up waiting for the second after a few seconds
+    // (if it turns up late, it's primed as soon as it's ready)
+    createSetPlayer(0, 0, () => { if (++readyCount >= playersNeeded) begin(); });
+    if (playersNeeded === 2) {
+      createSetPlayer(1, 1, () => {
+        if (started) primeNextSetTune();
+        else if (++readyCount >= playersNeeded) begin();
+      });
+      setTimeout(() => { if (setPlayerReady[0]) begin(); }, 6000);
+    }
   });
+}
+
+function startFirstSetTune() {
+  const player = setYoutubePlayers[0];
+  const link = setPlaybackQueue[0];
+  setPreparedQueueIndexes[0] = 0;
+  player.unMute();
+  player.loadVideoById({ videoId: getYouTubeVideoID(link.url), startSeconds: setLinkStart(link) });
+  player.setPlaybackRate(currentSpeed);
+  watchActiveSetPlayer();
+  setPrimeTimer = setTimeout(primeNextSetTune, SET_PRIME_DELAY);
+}
+
+// Load the next tune into the idle player, muted, so it buffers before it's needed
+function primeNextSetTune() {
+  const nextIndex = setPlaybackIndex + 1;
+  if (nextIndex >= setPlaybackQueue.length) return;
+
+  const idle = 1 - setActivePlayerIndex;
+  const player = setYoutubePlayers[idle];
+  if (!player || !setPlayerReady[idle]) return;
+  if (setPreparedQueueIndexes[idle] === nextIndex && (setPrimed[idle] || setPrimeStage[idle])) return;
+
+  const link = setPlaybackQueue[nextIndex];
+  setPreparedQueueIndexes[idle] = nextIndex;
+  setPrimed[idle] = false;
+  setPrimeStage[idle] = "loading";
+  player.mute();
+  player.loadVideoById({ videoId: getYouTubeVideoID(link.url), startSeconds: setLinkStart(link) });
+}
+
+function handleSetPlayerState(playerIndex, event) {
+  const player = setYoutubePlayers[playerIndex];
+  const state = event.data;
+
+  if (playerIndex !== setActivePlayerIndex) {
+    const link = setPlaybackQueue[setPreparedQueueIndexes[playerIndex]];
+    if (setPrimeStage[playerIndex] === "loading" && state === YT.PlayerState.PLAYING) {
+      // It's buffering for real now; stop it and wait for the pause before rewinding
+      setPrimeStage[playerIndex] = "pausing";
+      player.pauseVideo();
+    } else if (setPrimeStage[playerIndex] === "pausing" && state === YT.PlayerState.PAUSED) {
+      // Paused, so seeking keeps it paused: rewind to the tune's start and it's ready
+      if (link) player.seekTo(setLinkStart(link), true);
+      setPrimeStage[playerIndex] = "";
+      setPrimed[playerIndex] = true;
+      if (setWaitingForNext) {
+        setWaitingForNext = false;
+        handOffToNextSetTune();
+      }
+    } else if (setPrimed[playerIndex] && state === YT.PlayerState.PLAYING) {
+      player.pauseVideo(); // a primed player should never run on its own
+    }
+    return;
+  }
+
+  onPlayerStateChange(event); // keep the play/pause icon in step
+  if (state === YT.PlayerState.ENDED) handOffToNextSetTune(); // video ran out before the end point
+}
+
+function handOffToNextSetTune() {
+  const outgoing = setYoutubePlayers[setActivePlayerIndex];
+  const outgoingLink = setPlaybackQueue[setPlaybackIndex];
+  const remaining = outgoing && outgoingLink ? setRemainingSeconds(outgoing, outgoingLink) : 0;
+  const nextIndex = setPlaybackIndex + 1;
+  clearInterval(setPlaybackTimer);
+
+  // Last tune: just stop at its end point
+  if (nextIndex >= setPlaybackQueue.length) {
+    clearTimeout(setOutgoingPauseTimer);
+    setOutgoingPauseTimer = setTimeout(() => outgoing && outgoing.pauseVideo(), Math.min(remaining, 5) * 1000);
+    return;
+  }
+
+  const idle = 1 - setActivePlayerIndex;
+  const next = setYoutubePlayers[idle];
+  if (!next || !setPlayerReady[idle] || setPreparedQueueIndexes[idle] !== nextIndex) {
+    // Next tune isn't even loading: hold at this tune's end and start as soon as it's primed
+    setWaitingForNext = true;
+    if (outgoing) outgoing.pauseVideo();
+    primeNextSetTune();
+    return;
+  }
+
+  // Still priming (slow connection): rewind to its start and go anyway rather than wait
+  if (!setPrimed[idle]) {
+    setPrimeStage[idle] = "";
+    next.seekTo(setLinkStart(setPlaybackQueue[nextIndex]), true);
+  }
+  setPrimed[idle] = false;
+  next.setPlaybackRate(currentSpeed);
+  next.unMute();
+  next.playVideo();
+
+  // Pause the outgoing tune exactly at its end point, then prime it with the tune after next
+  clearTimeout(setOutgoingPauseTimer);
+  setOutgoingPauseTimer = setTimeout(() => {
+    if (outgoing) {
+      outgoing.pauseVideo();
+      outgoing.mute();
+    }
+    clearTimeout(setPrimeTimer);
+    setPrimeTimer = setTimeout(primeNextSetTune, SET_PRIME_DELAY);
+  }, Math.min(remaining, 5) * 1000);
+
+  setActivePlayerIndex = idle;
+  setPlaybackIndex = nextIndex;
+  watchActiveSetPlayer();
+}
+
+// Check the playing tune often, and start the handoff just before its end point
+function watchActiveSetPlayer() {
+  clearInterval(setPlaybackTimer);
+  setPlaybackTimer = setInterval(() => {
+    const player = setYoutubePlayers[setActivePlayerIndex];
+    const link = setPlaybackQueue[setPlaybackIndex];
+    if (!player || !link || typeof player.getPlayerState !== "function") return;
+    if (player.getPlayerState() !== YT.PlayerState.PLAYING) return; // paused or buffering: hold
+
+    if (setRemainingSeconds(player, link) <= SET_HANDOFF_LEAD) handOffToNextSetTune();
+  }, 40);
 }
 
 
@@ -566,15 +725,32 @@ function setupPlayPauseButton() {
   if (!playPauseBtn) return;
 
   playPauseBtn.addEventListener("click", () => {
-    if (!youtubePlayer || typeof youtubePlayer.getPlayerState !== "function") return;
+    // Nothing playing yet: start the set, or open the selected tune's first link
+    const noSetPlayer = activeSet && !setYoutubePlayers[setActivePlayerIndex];
+    const noTunePlayer = !activeSet && youtubePlayerContainer.classList.contains("hidden");
+    if (noSetPlayer) {
+      playSelectedSet();
+      return;
+    }
+    if (noTunePlayer) {
+      playSelectedTuneLink();
+      return;
+    }
 
-    const state = youtubePlayer.getPlayerState();
-    if (state === YT.PlayerState.PLAYING) {
-      youtubePlayer.pauseVideo();
+    const player = activePlayer();
+    if (!player || typeof player.getPlayerState !== "function") return;
+
+    if (player.getPlayerState() === YT.PlayerState.PLAYING) {
+      player.pauseVideo();
     } else {
-      youtubePlayer.playVideo();
+      player.playVideo();
     }
   });
+}
+
+// The player the controls act on: the playing set video while a set is open, otherwise the tune video
+function activePlayer() {
+  return activeSet ? setYoutubePlayers[setActivePlayerIndex] : youtubePlayer;
 }
 
 function onPlayerStateChange(event) {
@@ -596,13 +772,25 @@ function onPlayerStateChange(event) {
 
 
 // Speed buttons
+var currentSpeed = 1;
+
+function markActiveSpeed(speed) {
+  currentSpeed = speed;
+  document.querySelectorAll(".speed-btn").forEach(btn => {
+    btn.classList.toggle("active", parseFloat(btn.dataset.speed) === speed);
+  });
+}
+
 function setupSpeedControls() {
   document.querySelectorAll(".speed-btn").forEach(btn => {
     btn.addEventListener("click", () => {
       const speed = parseFloat(btn.dataset.speed);
-      if (youtubePlayer && youtubePlayer.setPlaybackRate) {
-        youtubePlayer.setPlaybackRate(speed);
-      }
+      // In a set, apply to both set players so the next tune keeps the speed
+      const players = activeSet ? setYoutubePlayers : [youtubePlayer];
+      players.forEach(player => {
+        if (player && player.setPlaybackRate) player.setPlaybackRate(speed);
+      });
+      markActiveSpeed(speed);
     });
   });
 }
@@ -610,16 +798,17 @@ function setupSpeedControls() {
 // Cue button
 function setupCueButton() {
   document.getElementById("cueBtn").addEventListener("click", () => {
-    if (youtubePlayer && youtubePlayer.seekTo) {
-      youtubePlayer.seekTo(currentCue, true);
+    const player = activePlayer();
+    if (player && player.seekTo) {
+      player.seekTo(currentCue, true);
     }
   });
 
   document.getElementById("skipBackBtn").addEventListener("click", () => {
-    if (youtubePlayer && youtubePlayer.getCurrentTime && youtubePlayer.seekTo) {
-      const currentTime = youtubePlayer.getCurrentTime();
-      const newTime = Math.max(0, currentTime - 5);
-      youtubePlayer.seekTo(newTime, true);
+    const player = activePlayer();
+    if (player && player.getCurrentTime && player.seekTo) {
+      const newTime = Math.max(0, player.getCurrentTime() - 8);
+      player.seekTo(newTime, true);
     }
   });
 
@@ -629,7 +818,7 @@ function setupCueButton() {
   cueInput.addEventListener("change", () => {
     currentCue = parseFloat(cueInput.value) || 0;
 
-    if (selectedTuneKey) {
+    if (selectedTuneKey && !activeSet) {
       // Save cue to Firebase
       database.ref(`tunes/${currentMode}/${selectedTuneKey}/cue`).set(currentCue, reportWriteError);
     }
@@ -651,7 +840,10 @@ function setupLoopControls() {
 
   loopBtn.addEventListener("click", function () {
     loopActive = !loopActive;
-    loopBtn.style.backgroundColor = loopActive ? "#cce5ff" : "";
+    loopBtn.classList.toggle("active", loopActive);
+    document.getElementById("loopFields").classList.toggle("open", loopActive);
+    editControls.classList.toggle("tucked", loopActive);
+    if (loopActive && !loopStartInput.value) loopStartInput.focus();
 
     if (loopActive) {
       loopInterval = setInterval(() => {
@@ -709,48 +901,20 @@ function renderTuneList(tunes) {
   // 1) Convert to array [ [key, tune], ... ]
   let tunesArray = Object.entries(tunes);
 
-  // 2) Conditionally sort
+  // 2) Sort within each knowledge section (the sections themselves group by knowledge)
+  const byName = (a, b) =>
+    (a[1].name || "").toLowerCase().localeCompare((b[1].name || "").toLowerCase());
+
   if (currentSortMode === 0) {
-    // Composite: knowledge ↓, name ↑, type ↑
-    tunesArray.sort((a, b) => {
-      const [ , ta ] = a;
-      const [ , tb ] = b;
-
-      const ka = parseInt(ta.knowledge) || 0;
-      const kb = parseInt(tb.knowledge) || 0;
-      if (kb !== ka) return kb - ka;
-
-      const na = (ta.name || "").toLowerCase();
-      const nb = (tb.name || "").toLowerCase();
-      if (na !== nb) return na.localeCompare(nb);
-
-      const taType = (ta.type || "").toLowerCase();
-      const tbType = (tb.type || "").toLowerCase();
-      return taType.localeCompare(tbType);
-    });
-  } else if (currentSortMode === 1) {
     // Name only
-    tunesArray.sort((a, b) =>
-      (a[1].name || "").toLowerCase().localeCompare((b[1].name || "").toLowerCase())
-    );
-
-} else if (currentSortMode === 2) {
-  // Sort by type, with ties broken by knowledge descending
-  tunesArray.sort((a, b) => {
-    const typeA = (a[1].type || "").toLowerCase();
-    const typeB = (b[1].type || "").toLowerCase();
-    const typeCmp = typeA.localeCompare(typeB);
-    if (typeCmp !== 0) {
-      return typeCmp;           // different types
-    }
-    // same type → compare knowledge descending
-    const ka = parseInt(a[1].knowledge) || 0;
-    const kb = parseInt(b[1].knowledge) || 0;
-    return kb - ka;
-  });
-}
-
-// if currentSortMode === -1, skip sorting => Firebase order
+    tunesArray.sort(byName);
+  } else {
+    // Type, with ties broken by name
+    tunesArray.sort((a, b) => {
+      const typeCmp = (a[1].type || "").toLowerCase().localeCompare((b[1].type || "").toLowerCase());
+      return typeCmp !== 0 ? typeCmp : byName(a, b);
+    });
+  }
 
   // 3) Group tunes by knowledge level
   const groupedTunes = {
@@ -778,7 +942,7 @@ function renderTuneList(tunes) {
 
     const header = document.createElement("div");
     header.className = "knowledge-header level-4-header";
-    header.textContent = `${knowledgeHeaders[4]} (${groupedTunes[4].length} tunes)`;
+    header.innerHTML = `<span class="header-label">${knowledgeHeaders[4]}</span><span class="header-count">${groupedTunes[4].length}</span>`;
 
     section.appendChild(header);
 
@@ -790,28 +954,27 @@ function renderTuneList(tunes) {
     tuneListDiv.appendChild(section);
   }
 
-  // Levels 1-3: collapsible sections in descending order
-  for (let level = 3; level >= 1; level--) {
+  if (repertoireOnly && groupedTunes[4].length === 0) {
+    tuneListDiv.textContent = "No repertoire tunes yet. Turn off \"Repertoire only\" to see the rest.";
+  }
+
+  // Levels 1-3: collapsible sections in descending order (hidden in "Repertoire only")
+  for (let level = 3; level >= 1 && !repertoireOnly; level--) {
     if (groupedTunes[level].length > 0) {
       const section = document.createElement("div");
-      section.className = "knowledge-section";
+      const isExpanded = expandedKnowledgeLevels[level];
+      section.className = `knowledge-section level-${level}`;
+      section.classList.toggle("collapsed", !isExpanded);
 
       const header = document.createElement("div");
       header.className = "knowledge-header";
-      const isExpanded = expandedKnowledgeLevels[level];
-      header.innerHTML = `<span class="toggle-icon">${isExpanded ? '▼' : '▶'}</span> ${knowledgeHeaders[level]} (${groupedTunes[level].length} tunes)`;
+      header.innerHTML = `<svg class="toggle-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4l4 4-4 4"/></svg><span class="header-label">${knowledgeHeaders[level]}</span><span class="header-count">${groupedTunes[level].length}</span>`;
       header.addEventListener("click", function() {
         const content = this.nextElementSibling;
-        const icon = this.querySelector(".toggle-icon");
-        if (content.style.display === "none") {
-          content.style.display = "block";
-          icon.textContent = "▼";
-          expandedKnowledgeLevels[level] = true;
-        } else {
-          content.style.display = "none";
-          icon.textContent = "▶";
-          expandedKnowledgeLevels[level] = false;
-        }
+        const expand = content.style.display === "none";
+        content.style.display = expand ? "block" : "none";
+        section.classList.toggle("collapsed", !expand);
+        expandedKnowledgeLevels[level] = expand;
       });
 
       const content = document.createElement("div");
@@ -877,6 +1040,7 @@ function renderSets(sets) {
       const setItem = document.createElement("div");
       setItem.className = "sets-content";
       setItem.dataset.setKey = set.key;
+      setItem.classList.toggle("selected", !!activeSet && activeSet.key === set.key);
 
       const setName = document.createElement("span");
       setName.className = "set-name";
@@ -884,9 +1048,9 @@ function renderSets(sets) {
       setItem.appendChild(setName);
 
       const playSetButton = document.createElement("button");
-      playSetButton.className = "set-play-button";
+      playSetButton.className = "inline-link-btn set-play-button";
       playSetButton.type = "button";
-      playSetButton.textContent = "▶";
+      playSetButton.innerHTML = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><path d="M6.3 5v6L11 8z" fill="currentColor" stroke="none"/></svg>';
       playSetButton.title = "Play set from the start";
       playSetButton.addEventListener("click", function (event) {
         event.stopPropagation();
@@ -1011,15 +1175,19 @@ function renderSetPlayback(set, repertoire) {
   youtubePlayerContainer.classList.add("hidden");
   activeSet = set;
   activeSet.tunes = getSetTunes(set, repertoire);
+  document.querySelectorAll(".sets-content").forEach(item => {
+    item.classList.toggle("selected", item.dataset.setKey === set.key);
+  });
   setPlaybackQueue = [];
   setPlaybackIndex = -1;
   setPlaybackPanel.innerHTML = "";
   setPlaybackPanel.classList.remove("hidden");
   tuneDetailsContainer.classList.remove("hidden");
-  setYoutubePlayersContainer.classList.remove("hidden");
-  editControls.classList.add("hidden");
   detailsControls.classList.add("hidden");
   detailsDisplay.classList.add("hidden");
+  // The set editor (rename + links) starts hidden; the bar's Edit button toggles it
+  setPlaybackPanel.classList.remove("editing");
+  setEditorButtonState(false);
 
   const defaultSetName = set.name || activeSet.tunes.map(tune => tune.name).filter(Boolean).join(", ");
   set.name = defaultSetName;
@@ -1057,13 +1225,8 @@ function renderSetPlayback(set, repertoire) {
       }
     });
   });
-  const playSetButton = document.createElement("button");
-  playSetButton.type = "button";
-  playSetButton.textContent = "Play set";
-  playSetButton.addEventListener("click", playSelectedSet);
   setActions.appendChild(renameSetButton);
   setActions.appendChild(setNameInput);
-  setActions.appendChild(playSetButton);
   setPlaybackPanel.appendChild(setActions);
 
   activeSet.tunes.forEach((tune, tuneIndex) => {
@@ -1093,6 +1256,27 @@ function renderSetPlayback(set, repertoire) {
     setPlaybackPanel.appendChild(tuneBlock);
   });
 
+  // Delete set: first press slides out "Are you sure?", which does the delete
+  const deleteRow = document.createElement("div");
+  deleteRow.className = "set-delete-row";
+  const deleteSetButton = document.createElement("button");
+  deleteSetButton.type = "button";
+  deleteSetButton.className = "danger-btn";
+  deleteSetButton.textContent = "Delete set";
+  const confirmSlide = document.createElement("span");
+  confirmSlide.className = "confirm-slide";
+  const confirmDeleteButton = document.createElement("button");
+  confirmDeleteButton.type = "button";
+  confirmDeleteButton.className = "danger-btn danger-solid";
+  confirmDeleteButton.textContent = "Are you sure?";
+  deleteSetButton.addEventListener("click", function () {
+    confirmSlide.classList.toggle("open");
+  });
+  confirmDeleteButton.addEventListener("click", deleteActiveSet);
+  confirmSlide.appendChild(confirmDeleteButton);
+  deleteRow.appendChild(deleteSetButton);
+  deleteRow.appendChild(confirmSlide);
+  setPlaybackPanel.appendChild(deleteRow);
 }
 
 function formatSetTime(seconds) {
@@ -1205,6 +1389,29 @@ function createSetLinkRow(tuneIndex, linkIndex, link) {
   return row;
 }
 
+// Edit button in a set: "Save" (darker) while the editor is open, "Edit" otherwise
+function setEditorButtonState(editing) {
+  editDetailsBtn.classList.toggle("open", editing);
+  editDetailsBtn.textContent = editing ? "Save" : "Edit";
+}
+
+function deleteActiveSet() {
+  if (!activeSet || !activeSet.key) return;
+
+  database.ref(`sets/${currentMode}/${activeSet.key}`).remove(function (error) {
+    if (error) {
+      reportWriteError(error);
+      return;
+    }
+    activeSet = null;
+    destroySetPlayers();
+    setPlaybackPanel.classList.add("hidden");
+    setPlaybackPanel.classList.remove("editing");
+    setEditorButtonState(false);
+    tuneDetailsContainer.classList.add("hidden");
+  });
+}
+
 function syncSetSelections() {
   if (!activeSet || !activeSet.key) return;
   database.ref(`sets/${currentMode}/${activeSet.key}/tunes`).set(activeSet.tunes, reportWriteError);
@@ -1215,37 +1422,29 @@ function createTuneItem(key, tune) {
   const tuneLinks = getTuneLinks(tune).filter(link => link.url.trim() !== "").slice(0, 4);
   const hasLink = tuneLinks.length > 0;
 
-  // Determine background color
+  // Knowledge level shown as a small dot; selection as a highlight
   const knowledge = parseInt(tune.knowledge) || 0;
-  let bgColor = "#fff";
-  if (knowledge === 1) bgColor = "#fdd";
-  else if (knowledge === 2) bgColor = "#ffd";
-  else if (knowledge >= 3) bgColor = "#dfd";
-  if (selectedTuneKey === key) bgColor = "#cce5ff";
 
   // Row container
   const tuneItem = document.createElement("div");
-  tuneItem.className = "tune-item";
+  tuneItem.className = `tune-item knowledge-${Math.min(knowledge, 4)}`;
+  tuneItem.classList.toggle("selected", selectedTuneKey === key);
   tuneItem.setAttribute("data-key", key);
-  tuneItem.style.cssText = `
-    display: flex; justify-content: flex-start; align-items: center;
-    gap: 20px; padding: 5px 10px; border-bottom: 1px solid #eee;
-    cursor: pointer; background-color: ${bgColor};
-  `;
 
   // Inner HTML
   tuneItem.innerHTML = `
-    <div style="flex: 2; text-align: left;">${escapeHtml(tune.name || "")}</div>
-    <div style="flex: 1; text-align: left;">${escapeHtml(tune.key || "")}</div>
-    <div style="flex: 1; text-align: left;">${escapeHtml(tune.type || "")}</div>
+    <span class="knowledge-dot" title="Knowledge ${knowledge || "not set"}"></span>
+    <div class="tune-name">${escapeHtml(tune.name || "")}</div>
+    <div class="tune-key">${escapeHtml(tune.key || "")}</div>
+    <div class="tune-type">${escapeHtml(tune.type || "")}</div>
     <div class="inline-link-buttons">
-      ${tuneLinks.map((link, index) => `<button class="inline-link-btn available" title="Play saved link ${index + 1}" data-link-index="${index}" data-key="${key}">▶️</button>`).join("")}
+      ${tuneLinks.map((link, index) => `<button class="inline-link-btn available" title="Play saved link ${index + 1}" data-link-index="${index}" data-key="${key}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><path d="M6.3 5v6L11 8z" fill="currentColor" stroke="none"/></svg></button>`).join("")}
     </div>
   `;
 
   // Row click handler
   tuneItem.addEventListener("click", function (e) {
-    if (e.target.classList.contains("inline-link-btn")) return;
+    if (e.target.closest(".inline-link-btn")) return;
 
     if (isSelectingSet) {
       if (selectedSetTuneKeys.has(key)) {
@@ -1264,6 +1463,7 @@ function createTuneItem(key, tune) {
 
     selectedTuneKey = key;
     activeSet = null;
+    setEditorButtonState(false);
     destroySetPlayers();
     setPlaybackPanel.classList.add("hidden");
     document.getElementById("chordDiagramsContainer").innerHTML = "";
@@ -1285,14 +1485,8 @@ function createTuneItem(key, tune) {
     editDetailsBtn.classList.remove("hidden");
     tuneDetailsContainer.classList.remove("hidden");
 
-    // Show/hide main link button
-    if (hasLink) {
-      clickLinkBtn.classList.remove("hidden");
-      clickLinkBtn.dataset.url = tuneLinks[0].url.trim();
-    } else {
-      clickLinkBtn.classList.add("hidden");
-      clickLinkBtn.dataset.url = "";
-    }
+    // First link: what the play button opens when no video is showing yet
+    selectedTuneUrl = hasLink ? tuneLinks[0].url.trim() : "";
 
     // Full tune data (including cue) from the live cache
     const data = (tunesCache && tunesCache[key]) || {};
@@ -1371,21 +1565,20 @@ document.getElementById("randomBtn").addEventListener("click", function () {
   }
 });
 
-// Main play button (below details pane)
-clickLinkBtn.addEventListener("click", function () {
-  const url = this.dataset.url;
+// Open the selected tune's first link (used by the play button when no video is showing)
+function playSelectedTuneLink() {
+  const url = selectedTuneUrl;
   if (!url) return;
 
   const videoID = getYouTubeVideoID(url);
-if (videoID) {
-  loadYouTubeAPI(() => {
-    createYouTubePlayer(videoID, currentCue);
-  });
-}
- else {
+  if (videoID) {
+    loadYouTubeAPI(() => {
+      createYouTubePlayer(videoID, currentCue);
+    });
+  } else {
     window.open(url, "_blank");
   }
-});
+}
 
 
 
@@ -1393,6 +1586,15 @@ if (videoID) {
 
 // Edit fields
 editDetailsBtn.addEventListener("click", function () {
+  // In a set, Edit shows the set editor and becomes Save; Save closes it
+  // (set changes are written as you make them; Save writes once more to be sure)
+  if (activeSet) {
+    const editing = setPlaybackPanel.classList.toggle("editing");
+    setEditorButtonState(editing);
+    if (!editing) syncSetSelections();
+    return;
+  }
+
   tuneDetailsText.classList.remove("hidden");
   chordInput.classList.remove("hidden");
   nameInput.classList.remove("hidden");
@@ -1606,10 +1808,10 @@ function showErrorOnRefreshBtn() {
   const refreshBtn = document.getElementById("refreshbtn");
   if (!refreshBtn) return;
 
-  refreshBtn.style.backgroundColor = "#f5b3c2";
+  refreshBtn.classList.add("error");
 
   setTimeout(() => {
-    refreshBtn.style.backgroundColor = "";
+    refreshBtn.classList.remove("error");
   }, 10000);
 }
 

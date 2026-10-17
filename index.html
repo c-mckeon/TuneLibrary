@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tune Library</title>
   <!-- Link to external CSS -->
-  <link rel="stylesheet" type="text/css" href="style.css?v=11">
+  <link rel="stylesheet" type="text/css" href="style.css?v=38">
   <!-- Firebase App (the core Firebase SDK) -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <!-- Firebase Database -->
@@ -14,26 +14,31 @@
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-auth.js"></script>
 </head>
 <body>
-  <!-- Instrument Mode Buttons -->
-  <div class="toggle-buttons">
-    <button id="guitarBtn" class="active">Guitar</button>
-    <button id="mandolinBtn">Mandolin</button>
+  <!-- Header: title, instrument switch, password -->
+  <header class="app-header">
+    <h1 class="app-title">Tune Library</h1>
+    <div class="toggle-buttons segmented" role="group" aria-label="Instrument">
+      <button id="mandolinBtn">Mandolin</button>
+      <button id="guitarBtn" class="active">Guitar</button>
+    </div>
     <input type="password" id="passwordInput" class="hidden" placeholder="Password" autocomplete="current-password">
-  </div>
-  
+  </header>
+
   <div id="content">
     <!-- Input Form for New Tune -->
     <div class="input-box">
-      <input type="text" style="width: 250px" id="tuneName" placeholder="Tune Name">
-      <!--<input type="number" style="width: 120px" id="knowledge" placeholder="Knowledge (1-5)" min="1" max="5"> -->
-      <!--<input type="number" id="priority" placeholder="Priority (1-3)" min="1" max="3"> -->
-      <button id="saveTune">Save</button>
-      <button id="refreshbtn">↻</button>
-      <button id="sortbtn">≡</button>
+      <button id="newTuneBtn" class="icon-btn" title="Add a tune" aria-expanded="false"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 2.5v11M2.5 8h11"/></svg></button>
+      <span id="newTuneFields" class="slide-out">
+        <input type="text" id="tuneName" placeholder="Tune name">
+        <button id="saveTune">Save</button>
+      </span>
+      <button id="refreshbtn" class="icon-btn" title="Refresh"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9"/><path d="M12.5 1.8v2.7H9.8"/></svg></button>
+      <button id="sortbtn" class="icon-btn"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2.5 4h11M4.5 8h7M6.5 12h3"/></svg></button>
+      <button id="randomBtn" class="icon-btn" title="Play a random link from a random repertoire tune"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><circle cx="5" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="11" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="5" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="11" cy="11" r="1" fill="currentColor" stroke="none"/></svg></button>
       <button id="setsBtn">Sets</button>
-      <button id="randomBtn" title="Play a random link from a random repertoire tune"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><circle cx="5" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="11" cy="5" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="5" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="11" cy="11" r="1" fill="currentColor" stroke="none"/></svg></button>
       <button id="addSetBtn" class="hidden">Add set</button>
       <button id="saveSetBtn" class="hidden">Save set</button>
+      <button id="repertoireOnlyBtn" class="active" aria-pressed="true" title="Hide Outdated and Next up">Repertoire only</button>
       
     </div>
     
@@ -49,34 +54,36 @@
 <!-- Tune Details (Appears on clicking a tune) -->
 <div class="tune-details hidden" id="tuneDetailsContainer">
 
-<div id="editControls" class="edit-controls">
-  <button id="editDetailsBtn">Edit</button>
-  <button id="saveDetails" class="hidden">Save</button>
-  <button id="clicklink" class="hidden">Link</button>
-</div>
 
 <div id="youtubeControls" class="player-controls">
   <div class="player-control-group">
     <button id="playPauseBtn" >⏵︎</button>
-    <button class="speed-btn" data-speed="0.6">.6</button>
-    <button class="speed-btn" data-speed="0.7">.7</button>
-    <button class="speed-btn" data-speed="0.8">.8</button>
-    <button class="speed-btn" data-speed="0.9">.9</button>
-    <button class="speed-btn" data-speed="0.95">.95</button>
+    <button class="speed-btn" data-speed="0.6">0.6</button>
+    <button class="speed-btn" data-speed="0.7">0.7</button>
+    <button class="speed-btn" data-speed="0.8">0.8</button>
+    <button class="speed-btn" data-speed="0.9">0.9</button>
+    <button class="speed-btn" data-speed="0.95">0.95</button>
     <button class="speed-btn" data-speed="1">1</button>
     <button class="speed-btn" data-speed="1.05">1.05</button>
     <button class="speed-btn" data-speed="1.1">1.1</button>
     <button class="speed-btn" data-speed="1.2">1.2</button>
-    <button id="skipBackBtn" title="Rewind 5 seconds">« </button>
+    <button id="skipBackBtn" title="Back 8 seconds"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M8 4.5v7L3 8zM13.5 4.5v7L8.5 8z"/></svg></button>
     <button id="cueBtn">Cue</button>
-        <input id="cueInput" type="number" step="0.1" style="width: 50px;" /> 
+    <input id="cueInput" type="number" step="0.1" title="Cue point (seconds)" />
   </div>
 
   <div id="loopControls" class="player-control-group">
     <button id="loopBtn">Loop</button>
-    <input id="loopInputstart" type="number" step="0.1" placeholder="⏵︎" style="width: 45px;" />
-    <input id="loopInputend" type="number" step="0.1" placeholder="⏴︎" style="width: 45px;" />
-    <input id="loopDelayInput" type="number" step="0.1" placeholder="⏸" style="width: 45px;" />
+    <span id="loopFields" class="loop-fields">
+      <input id="loopInputstart" type="number" step="0.1" placeholder="Start" title="Loop start (seconds)" />
+      <input id="loopInputend" type="number" step="0.1" placeholder="End" title="Loop end (seconds)" />
+      <input id="loopDelayInput" type="number" step="0.1" placeholder="Gap" title="Pause before looping (seconds)" />
+    </span>
+    <!-- Edit/Save (in a set, Edit shows/hides the set editor) -->
+    <span id="editControls" class="edit-slide">
+      <button id="editDetailsBtn">Edit</button>
+      <button id="saveDetails" class="hidden">Save</button>
+    </span>
   </div>
 </div>
 
@@ -108,24 +115,21 @@
    
 <!-- Additional Edit Fields -->
 
- <div id="repertoireLinksEditor" class="hidden"></div>
-<button id="addRepertoireLinkBtn" class="hidden">Add link</button><br> 
-  <input type="text" id="nameInput" class="hidden" style="width: 190px;" placeholder="Name"><br>
-  <input type="text" id="chordInput" class="hidden" style="width: 190px;"  rows="20" cols="1"placeholder="Chords ">
-  <input type="text" id="linkInput" class="hidden" style="width: 570px;" placeholder="Link"><br>
-  <input type="text" id="keyInput" class="hidden" style="width: 190px;" placeholder="Key"><br>
-  <input type="text" id="typeInput" class="hidden" style="width: 190px;" placeholder="Type"><br>
-  <input type="number" id="knowledgeInput" class="hidden" style="width: 190px;" placeholder="Knowledge (1-5)"> <br>
-<textarea id="tuneDetails" class="hidden" rows="20" cols="60"></textarea>
+<div class="edit-fields">
+  <div id="repertoireLinksEditor" class="hidden"></div>
+  <button id="addRepertoireLinkBtn" class="hidden">Add link</button>
+  <div class="edit-grid">
+    <!-- Each box keeps its description inside, e.g. "Type: Reel" -->
+    <label class="field field-name"><span class="field-label">Name:</span><input type="text" id="nameInput" class="hidden"></label>
+    <label class="field field-chords"><span class="field-label">Chords:</span><input type="text" id="chordInput" class="hidden"></label>
+    <input type="text" id="linkInput" class="hidden" placeholder="Link">
+    <label class="field field-key"><span class="field-label">Key:</span><input type="text" id="keyInput" class="hidden"></label>
+    <label class="field field-type"><span class="field-label">Type:</span><input type="text" id="typeInput" class="hidden"></label>
+    <label class="field field-knowledge"><span class="field-label">Knowledge:</span><input type="number" id="knowledgeInput" class="hidden" placeholder="1–4"></label>
+  </div>
+  <textarea id="tuneDetails" class="hidden" rows="20"></textarea>
 </div>
-
-    <br>
-
-   
-    <br>
-
-    <!-- Buttons -->
-
+</div>
 
 </div>
 
@@ -135,7 +139,7 @@
   
   
   <!-- Link to external JavaScript file -->
-  <script src="script.js?v=17"></script>
+  <script src="script.js?v=33"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
 
 </body>
