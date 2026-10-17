@@ -32,7 +32,6 @@ var editingTuneLinks = [];
 var guitarBtn = document.getElementById("guitarBtn");
 var mandolinBtn = document.getElementById("mandolinBtn");
 var tuneNameInput = document.getElementById("tuneName");
-var knowledgeInput = document.getElementById("knowledge");
 var saveTuneBtn = document.getElementById("saveTune");
 var tuneListDiv = document.getElementById("tuneList");
 var tuneDetailsContainer = document.getElementById("tuneDetailsContainer");
@@ -129,21 +128,118 @@ function getYouTubeVideoID(url) {
   return null;
 }
 
-// Mode toggle / load tunes
+// Live data: one listener each for the current mode's tunes and sets.
+// The cached values are what everything renders from.
+var tunesCache = null;
+var setsCache = null;
+var tunesLoaded = false;
+var setsLoaded = false;
+var tunesRef = null;
+var setsRef = null;
+
+function subscribeToMode() {
+  if (tunesRef) tunesRef.off();
+  if (setsRef) setsRef.off();
+  tunesCache = null;
+  setsCache = null;
+  tunesLoaded = false;
+  setsLoaded = false;
+  loadTunes();
+
+  tunesRef = database.ref("tunes/" + currentMode);
+  setsRef = database.ref("sets/" + currentMode);
+
+  tunesRef.on("value", function (snapshot) {
+    tunesCache = snapshot.val();
+    tunesLoaded = true;
+    if (!isSetsMode || isSelectingSet) loadTunes();
+  }, onDatabaseError);
+
+  setsRef.on("value", function (snapshot) {
+    setsCache = snapshot.val();
+    setsLoaded = true;
+    if (isSetsMode && !isSelectingSet) loadTunes();
+  }, onDatabaseError);
+}
+
+function onDatabaseError(error) {
+  console.error("Database error:", error);
+  showErrorOnRefreshBtn();
+  tuneListDiv.textContent = "Couldn't load tunes: " + (error && error.message);
+}
+
+// Callback for writes, so failed saves aren't silent
+function reportWriteError(error) {
+  if (!error) return;
+  console.error("Error saving:", error);
+  if (error.code === "PERMISSION_DENIED") {
+    passwordInput.classList.remove("hidden");
+    passwordInput.focus();
+    alert("Enter the password to save changes.");
+    return;
+  }
+  showErrorOnRefreshBtn();
+  alert("Couldn't save: " + error.message);
+}
+
+// Render the list from the cache
 function loadTunes() {
   if (isSetsMode && !isSelectingSet) {
-    database.ref("sets/" + currentMode).once("value", function (snapshot) {
-      renderSets(snapshot.val());
-    });
+    if (!setsLoaded) {
+      tuneListDiv.textContent = "Loading…";
+      return;
+    }
+    renderSets(setsCache);
     return;
   }
 
-  var tunesRef = database.ref("tunes/" + currentMode);
-  tunesRef.once("value", function (snapshot) {
-    var tunes = snapshot.val();
-    renderTuneList(tunes);
-  });
+  if (!tunesLoaded) {
+    tuneListDiv.textContent = "Loading…";
+    return;
+  }
+  renderTuneList(tunesCache);
 }
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Sign-in: password only, against a single fixed Firebase email/password account.
+// Database rules restrict access to this account. Firebase remembers the session.
+const OWNER_EMAIL = "owner@tunes.app";
+const passwordInput = document.getElementById("passwordInput");
+
+passwordInput.addEventListener("keydown", function (e) {
+  if (e.key !== "Enter" || !passwordInput.value) return;
+  firebase.auth().signInWithEmailAndPassword(OWNER_EMAIL, passwordInput.value)
+    .then(function () {
+      passwordInput.value = "";
+    })
+    .catch(function (error) {
+      console.error("Sign-in failed:", error);
+      passwordInput.value = "";
+      passwordInput.placeholder = "Wrong";
+    });
+});
+
+firebase.auth().onAuthStateChanged(function (user) {
+  passwordInput.classList.toggle("hidden", !!user);
+  subscribeToMode();
+});
+
+// Show connection state on the refresh button
+database.ref(".info/connected").on("value", function (snapshot) {
+  if (snapshot.val() === true) {
+    refreshBtn.style.backgroundColor = "";
+  } else if (tunesLoaded) {
+    refreshBtn.style.backgroundColor = "#f5b3c2";
+  }
+});
 
 
 guitarBtn.addEventListener("click", function () {
@@ -154,7 +250,7 @@ guitarBtn.addEventListener("click", function () {
   mandolinBtn.classList.remove("active");
   selectedTuneKey = null;
   tuneDetailsContainer.classList.add("hidden");
-  loadTunes();
+  subscribeToMode();
 });
 
 mandolinBtn.addEventListener("click", function () {
@@ -165,7 +261,7 @@ mandolinBtn.addEventListener("click", function () {
   guitarBtn.classList.remove("active");
   selectedTuneKey = null;
   tuneDetailsContainer.classList.add("hidden");
-  loadTunes();
+  subscribeToMode();
 });
 
 // Save a new tune
@@ -178,20 +274,19 @@ saveTuneBtn.addEventListener("click", function () {
   };
   database.ref("tunes/" + currentMode).push(newTune, function (error) {
     if (error) {
-      console.error("Error saving tune:", error);
+      reportWriteError(error);
     } else {
       tuneNameInput.value = "";
-      knowledgeInput.value = "";
     }
   });
 });
 
-// Refresh button functionality
+// Refresh button: re-subscribe (useful after a dropped connection)
 refreshBtn.addEventListener("click", function () {
   console.log("Refreshing tunes list...");
   selectedTuneKey = null;
   tuneDetailsContainer.classList.add("hidden");
-  loadTunes();
+  subscribeToMode();
 });
 
 function updateSetControls() {
@@ -240,8 +335,8 @@ saveSetBtn.addEventListener("click", function () {
     return;
   }
 
-  database.ref("tunes/" + currentMode).once("value", function (snapshot) {
-    const tunes = snapshot.val() || {};
+  {
+    const tunes = tunesCache || {};
     const setTunes = Array.from(selectedSetTuneKeys)
       .map(key => {
         const tune = tunes[key];
@@ -261,7 +356,7 @@ saveSetBtn.addEventListener("click", function () {
       name: tuneNames.join(", ")
     }, function (error) {
       if (error) {
-        console.error("Error saving set:", error);
+        reportWriteError(error);
         return;
       }
       isSelectingSet = false;
@@ -269,7 +364,7 @@ saveSetBtn.addEventListener("click", function () {
       updateSetControls();
       loadTunes();
     });
-  });
+  }
 });
 
 let player; // global player object
@@ -316,9 +411,7 @@ youtubePlayerContainer.classList.remove("hidden");
       onReady: (event) => {
         youtubePlayer.seekTo(cueTime, true);
         if (autoplay) youtubePlayer.playVideo();
-        setupSpeedControls();
-        setupCueButton();
-        setupPlayPauseButton();  // Setup your play/pause button events here
+        document.getElementById("cueInput").value = currentCue;
         if (onReadyCallback) onReadyCallback();
       },
       onStateChange: onPlayerStateChange // Listen to state changes
@@ -538,7 +631,7 @@ function setupCueButton() {
 
     if (selectedTuneKey) {
       // Save cue to Firebase
-      database.ref(`tunes/${currentMode}/${selectedTuneKey}/cue`).set(currentCue);
+      database.ref(`tunes/${currentMode}/${selectedTuneKey}/cue`).set(currentCue, reportWriteError);
     }
   });
 }
@@ -797,17 +890,13 @@ function renderSets(sets) {
       playSetButton.title = "Play set from the start";
       playSetButton.addEventListener("click", function (event) {
         event.stopPropagation();
-        database.ref("tunes/" + currentMode).once("value", function (snapshot) {
-          renderSetPlayback(set, snapshot.val() || {});
-          playSelectedSet();
-        });
+        renderSetPlayback(set, tunesCache || {});
+        playSelectedSet();
       });
       setItem.appendChild(playSetButton);
 
       setItem.addEventListener("click", function () {
-        database.ref("tunes/" + currentMode).once("value", function (snapshot) {
-          renderSetPlayback(set, snapshot.val() || {});
-        });
+        renderSetPlayback(set, tunesCache || {});
       });
       section.appendChild(setItem);
     });
@@ -959,7 +1048,7 @@ function renderSetPlayback(set, repertoire) {
   setNameInput.addEventListener("input", function () {
     set.name = setNameInput.value;
     if (set.key) {
-      database.ref(`sets/${currentMode}/${set.key}/name`).set(set.name);
+      database.ref(`sets/${currentMode}/${set.key}/name`).set(set.name, reportWriteError);
     }
     document.querySelectorAll(".sets-content").forEach(setItem => {
       if (setItem.dataset.setKey === set.key) {
@@ -1118,7 +1207,7 @@ function createSetLinkRow(tuneIndex, linkIndex, link) {
 
 function syncSetSelections() {
   if (!activeSet || !activeSet.key) return;
-  database.ref(`sets/${currentMode}/${activeSet.key}/tunes`).set(activeSet.tunes);
+  database.ref(`sets/${currentMode}/${activeSet.key}/tunes`).set(activeSet.tunes, reportWriteError);
 }
 
 // Helper function to create a tune item
@@ -1146,9 +1235,9 @@ function createTuneItem(key, tune) {
 
   // Inner HTML
   tuneItem.innerHTML = `
-    <div style="flex: 2; text-align: left;">${tune.name || ""}</div>
-    <div style="flex: 1; text-align: left;">${tune.key || ""}</div>
-    <div style="flex: 1; text-align: left;">${tune.type || ""}</div>
+    <div style="flex: 2; text-align: left;">${escapeHtml(tune.name || "")}</div>
+    <div style="flex: 1; text-align: left;">${escapeHtml(tune.key || "")}</div>
+    <div style="flex: 1; text-align: left;">${escapeHtml(tune.type || "")}</div>
     <div class="inline-link-buttons">
       ${tuneLinks.map((link, index) => `<button class="inline-link-btn available" title="Play saved link ${index + 1}" data-link-index="${index}" data-key="${key}">▶️</button>`).join("")}
     </div>
@@ -1199,36 +1288,32 @@ function createTuneItem(key, tune) {
     // Show/hide main link button
     if (hasLink) {
       clickLinkBtn.classList.remove("hidden");
-      clickLinkBtn.dataset.url = tune.link.trim();
+      clickLinkBtn.dataset.url = tuneLinks[0].url.trim();
     } else {
       clickLinkBtn.classList.add("hidden");
       clickLinkBtn.dataset.url = "";
     }
 
-    // Fetch full tune data (including cue)
-    database
-      .ref(`tunes/${currentMode}/${selectedTuneKey}`)
-      .once("value", function (snapshot) {
-        const data = snapshot.val() || {};
-        tuneData[selectedTuneKey] = data;
+    // Full tune data (including cue) from the live cache
+    const data = (tunesCache && tunesCache[key]) || {};
+    tuneData[selectedTuneKey] = data;
 
-        // Chords
-        chordInput.value = data.chords || "";
-        chordInput.classList.add("hidden");
-        if (data.chords) showChordDiagrams(data.chords);
+    // Chords
+    chordInput.value = data.chords || "";
+    chordInput.classList.add("hidden");
+    if (data.chords) showChordDiagrams(data.chords);
 
-        // Cue input
-        if (data.cue !== undefined) {
-          currentCue = data.cue;
-          document.getElementById("cueInput").value = currentCue;
-        } else {
-          currentCue = 0;
-          document.getElementById("cueInput").value = "";
-        }
+    // Cue input
+    if (data.cue !== undefined) {
+      currentCue = data.cue;
+      document.getElementById("cueInput").value = currentCue;
+    } else {
+      currentCue = 0;
+      document.getElementById("cueInput").value = "";
+    }
 
-        // Re-render list to update highlights
-        loadTunes();
-      });
+    // Re-render list to update highlights
+    loadTunes();
   });
 
   // Inline play button handler
@@ -1260,6 +1345,32 @@ function createTuneItem(key, tune) {
 }
 
 
+// Random button: play a random link from a random repertoire (knowledge 4) tune
+document.getElementById("randomBtn").addEventListener("click", function () {
+  {
+    const tunes = tunesCache || {};
+    const candidates = Object.entries(tunes)
+      .filter(([, tune]) => parseInt(tune.knowledge) === 4)
+      .map(([key, tune]) => [key, getTuneLinks(tune).filter(link => getYouTubeVideoID(link.url))])
+      .filter(([, links]) => links.length > 0);
+
+    if (candidates.length === 0) {
+      alert("No repertoire tunes with YouTube links.");
+      return;
+    }
+
+    const [key, links] = candidates[Math.floor(Math.random() * candidates.length)];
+    const link = links[Math.floor(Math.random() * links.length)];
+
+    if (isSetsMode) leaveSetsMode();
+    renderTuneList(tunes);
+    const row = tuneListDiv.querySelector(`.tune-item[data-key="${key}"]`);
+    if (row) row.click();
+
+    playTuneLink(link);
+  }
+});
+
 // Main play button (below details pane)
 clickLinkBtn.addEventListener("click", function () {
   const url = this.dataset.url;
@@ -1276,9 +1387,6 @@ if (videoID) {
   }
 });
 
-
-// Initial load
-loadTunes();
 
 
 
@@ -1359,7 +1467,7 @@ function saveEditedTune(onComplete) {
       knowledge: knowledge
   }, function (error) {
       if (error) {
-          console.error("Error updating tune:", error);
+          reportWriteError(error);
       } else {
           detailsDisplay.textContent = details;
           tuneData[selectedTuneKey] = {
@@ -1379,10 +1487,6 @@ saveDetailsBtn.addEventListener("click", function () {
 
   
 
-  
-  
-  loadTunes();
-  
 
 
 
@@ -1491,8 +1595,11 @@ function showChordDiagrams(chords) {
 }
 
 
+// Player controls are wired once; they act on whichever youtubePlayer is current
 setupLoopControls();
 setupPlayPauseButton();
+setupSpeedControls();
+setupCueButton();
 
 
 function showErrorOnRefreshBtn() {
@@ -1506,24 +1613,3 @@ function showErrorOnRefreshBtn() {
   }, 10000);
 }
 
-function checkConnection() {
-  if (!navigator.onLine) {
-    showErrorOnRefreshBtn();
-  }
-}
-
-// Run check immediately on page load
-checkConnection();
-
-// Also listen for going offline after load
-window.addEventListener('offline', () => {
-  console.log('You are offline');
-  showErrorOnRefreshBtn();
-});
-
-// Optional: clear red when back online
-window.addEventListener('online', () => {
-  console.log('Back online');
-  const refreshBtn = document.getElementById("refreshbtn");
-  if (refreshBtn) refreshBtn.style.backgroundColor = "";
-});

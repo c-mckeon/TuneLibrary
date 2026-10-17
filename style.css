@@ -10,6 +10,12 @@
     padding: 10px;
     font-size: 16px;
   }
+  #passwordInput {
+    width: 90px;
+    padding: 5px;
+    font-size: 14px;
+    align-self: center;
+  }
   .toggle-buttons .active {
     background-color: #4285F4;
     color: white;
@@ -29,6 +35,11 @@
   .input-box button {
     padding: 5px 10px;
     font-size: 14px;
+  }
+  #randomBtn svg {
+    width: 1em;
+    height: 1em;
+    vertical-align: -0.125em;
   }
 
   .tune-list > div {

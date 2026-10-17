@@ -1,0 +1,6 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": "auth != null && auth.token.email === 'owner@tunes.app'"
+  }
+}
