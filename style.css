@@ -276,7 +276,7 @@ textarea {
   transition: transform 0.2s ease;
 }
 .switch input:checked + .switch-track {
-  background: #c9a982; /* light brown */
+  background: #dcc4a6; /* light brown */
 }
 .switch input:checked + .switch-track::after {
   transform: translateX(14px);
