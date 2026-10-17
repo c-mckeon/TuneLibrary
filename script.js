@@ -223,12 +223,7 @@ passwordInput.addEventListener("keydown", function (e) {
     .catch(function (error) {
       console.error("Sign-in failed:", error);
       passwordInput.value = "";
-      const wrongPasswordCodes = ["auth/wrong-password", "auth/invalid-login-credentials", "auth/invalid-credential", "auth/user-not-found"];
-      if (wrongPasswordCodes.includes(error.code)) {
-        passwordInput.placeholder = "Wrong";
-      } else {
-        alert("Sign-in failed: " + (error.code || "") + " " + error.message);
-      }
+      passwordInput.placeholder = "Wrong";
     });
 });
 
