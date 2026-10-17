@@ -1,6 +1,6 @@
 // Firebase config (v8 style)
 var firebaseConfig = {
-  apiKey: "AIzaSyAZt1pHQvfBNm2goItl5pFk3h5SqE5rOg",
+  apiKey: "AIzaSyAZt1pYHQvfBNm2goItl5pFk3h5SqE5rOg",
   authDomain: "tunes-96bdd.firebaseapp.com",
   databaseURL: "https://tunes-96bdd-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "tunes-96bdd",
@@ -223,7 +223,12 @@ passwordInput.addEventListener("keydown", function (e) {
     .catch(function (error) {
       console.error("Sign-in failed:", error);
       passwordInput.value = "";
-      passwordInput.placeholder = "Wrong";
+      const wrongPasswordCodes = ["auth/wrong-password", "auth/invalid-login-credentials", "auth/invalid-credential", "auth/user-not-found"];
+      if (wrongPasswordCodes.includes(error.code)) {
+        passwordInput.placeholder = "Wrong";
+      } else {
+        alert("Sign-in failed: " + (error.code || "") + " " + error.message);
+      }
     });
 });
 
