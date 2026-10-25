@@ -52,6 +52,68 @@ const linkInput = document.getElementById("linkInput");
 const keyInput = document.getElementById("keyInput");
 const typeInput = document.getElementById("typeInput");
 const editKnowledgeInput = document.getElementById("knowledgeInput");
+const likelyChordsInput = document.getElementById("likelyChordsInput"); // read-only, filled from the key
+
+// Main chords for a key, e.g. "G" -> "G C D Em Am", "Ador" -> "Am G D C Em".
+// Accepts free text like "Em", "F#m", "A minor", "D dorian", "Dmix", "G/D".
+const NOTE_SEMITONES = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const SHARP_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const FLAT_NAMES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"];
+// [semitones above tonic, "m" for minor] in order of how often they turn up
+const MODE_CHORDS = {
+  major:      [[0, ""], [5, ""], [7, ""], [9, "m"], [2, "m"]],
+  minor:      [[0, "m"], [10, ""], [3, ""], [5, "m"], [8, ""], [7, "m"]],
+  dorian:     [[0, "m"], [10, ""], [5, ""], [3, ""], [7, "m"]],
+  mixolydian: [[0, ""], [10, ""], [5, ""], [7, "m"], [2, "m"]]
+};
+// Distance from the mode's tonic down to its relative major, for choosing sharps vs flats
+const MODE_TO_MAJOR = { major: 0, minor: 3, dorian: 10, mixolydian: 5 };
+const FLAT_MAJOR_KEYS = [5, 10, 3, 8, 1, 6]; // F Bb Eb Ab Db Gb
+
+function parseKey(text) {
+  const m = text.trim().match(/^([A-Ga-g])\s*(#|♯|b|♭|s)?\s*(.*)$/);
+  if (!m) return null;
+  let root = NOTE_SEMITONES[m[1].toUpperCase()];
+  if (m[2] === "#" || m[2] === "♯" || m[2] === "s") root += 1;
+  if (m[2] === "b" || m[2] === "♭") root -= 1;
+  root = (root + 12) % 12;
+  // "Em dor" / "Am mix": the m is redundant when a mode name follows
+  const rest = m[3].toLowerCase().replace(/[^a-z]/g, "").replace(/^m(?=dor|mix|aeo|min)/, "");
+  let mode = "major";
+  if (/^dor/.test(rest)) mode = "dorian";
+  else if (/^mix/.test(rest)) mode = "mixolydian";
+  else if (/^(m$|min|aeo)/.test(rest) || rest === "m") mode = "minor";
+  return { root, mode };
+}
+
+// Sort position for a key so variants group together ("Bm" = "B min").
+// Root from A upwards, then mode; unreadable keys after, empty keys last.
+const MODE_ORDER = { major: 0, mixolydian: 1, dorian: 2, minor: 3 };
+function keySortValue(keyText) {
+  const text = (keyText || "").trim();
+  if (!text) return 2000;
+  const key = parseKey(text.split(/[\/,&]|\b(?:and|or)\b/i)[0]);
+  if (!key) return 1000;
+  return ((key.root - 9 + 12) % 12) * 4 + MODE_ORDER[key.mode];
+}
+
+function likelyChordsForKey(keyText) {
+  const chords = [];
+  (keyText || "").split(/[\/,&]|\b(?:and|or)\b/i).forEach(part => {
+    const key = parseKey(part);
+    if (!key) return;
+    const relMajor = (key.root + MODE_TO_MAJOR[key.mode]) % 12;
+    // Follow the spelling typed (C# vs Db); otherwise use the key signature
+    const accidental = part.trim().slice(1, 2);
+    const names = /[#♯s]/.test(accidental) ? SHARP_NAMES
+      : /[b♭]/.test(accidental) || FLAT_MAJOR_KEYS.includes(relMajor) ? FLAT_NAMES : SHARP_NAMES;
+    MODE_CHORDS[key.mode].forEach(([step, quality]) => {
+      const chord = names[(key.root + step) % 12] + quality;
+      if (!chords.includes(chord)) chords.push(chord);
+    });
+  });
+  return chords.join(" ");
+}
 const repertoireLinksEditor = document.getElementById("repertoireLinksEditor");
 const addRepertoireLinkBtn = document.getElementById("addRepertoireLinkBtn");
 var selectedTuneUrl = "";
@@ -86,7 +148,8 @@ guitarBtn.classList.remove("active");
 updateModeClass();
 
 
-let currentSortMode = 0; // 0=name, 1=type
+let currentSortMode = 0; // 0=name, 1=type, 2=recently added
+const sortModeTitles = ["Sorted by name", "Sorted by type", "Sorted by most recently added"];
 const knowledgeHeaders = {
   1: "Next up",
   2: "In progress",
@@ -101,11 +164,11 @@ const expandedKnowledgeLevels = {
 };
 const sortBtn = document.getElementById("sortbtn");
 
-sortBtn.title = "Sorted by name";
+sortBtn.title = sortModeTitles[0];
 
 sortBtn.addEventListener("click", () => {
-  currentSortMode = (currentSortMode + 1) % 2; // toggle name <-> type
-  sortBtn.title = currentSortMode === 0 ? "Sorted by name" : "Sorted by type";
+  currentSortMode = (currentSortMode + 1) % sortModeTitles.length; // name -> type -> recent
+  sortBtn.title = sortModeTitles[currentSortMode];
   loadTunes(); // reload tunes with new sorting
 });
 
@@ -908,11 +971,23 @@ function renderTuneList(tunes) {
   if (currentSortMode === 0) {
     // Name only
     tunesArray.sort(byName);
+  } else if (currentSortMode === 2) {
+    // Most recently added first. Firebase push keys are time-ordered,
+    // so a plain (non-locale) key comparison gives creation order.
+    tunesArray.sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0));
   } else {
-    // Type, with ties broken by name
+    // Type, then key (tunes without a key last), then name
     tunesArray.sort((a, b) => {
       const typeCmp = (a[1].type || "").toLowerCase().localeCompare((b[1].type || "").toLowerCase());
-      return typeCmp !== 0 ? typeCmp : byName(a, b);
+      if (typeCmp !== 0) return typeCmp;
+      const sortA = keySortValue(a[1].key), sortB = keySortValue(b[1].key);
+      if (sortA !== sortB) return sortA - sortB;
+      // Unreadable keys share one value, so order those by their text
+      if (sortA === 1000) {
+        const rawCmp = a[1].key.trim().toLowerCase().localeCompare(b[1].key.trim().toLowerCase());
+        if (rawCmp !== 0) return rawCmp;
+      }
+      return byName(a, b);
     });
   }
 
@@ -1476,7 +1551,7 @@ function createTuneItem(key, tune) {
     // Chords
     chordInput.value = data.chords || "";
     chordInput.classList.add("hidden");
-    if (data.chords) showChordDiagrams(data.chords);
+    showTuneChords(data);
 
     // Cue input
     if (data.cue !== undefined) {
@@ -1585,6 +1660,7 @@ editDetailsBtn.addEventListener("click", function () {
   keyInput.classList.remove("hidden");
   typeInput.classList.remove("hidden");
   editKnowledgeInput.classList.remove("hidden");
+  likelyChordsInput.classList.remove("hidden");
 
   detailsDisplay.classList.add("hidden");
   detailsControls.classList.add("hidden");
@@ -1601,6 +1677,11 @@ editDetailsBtn.addEventListener("click", function () {
   keyInput.value = tune.key || "";
   typeInput.value = tune.type || "";
   editKnowledgeInput.value = tune.knowledge || "";
+  likelyChordsInput.value = likelyChordsForKey(keyInput.value);
+});
+
+keyInput.addEventListener("input", function () {
+  likelyChordsInput.value = likelyChordsForKey(keyInput.value);
 });
 
 addRepertoireLinkBtn.addEventListener("click", function () {
@@ -1621,6 +1702,7 @@ function finishEditingTune() {
   keyInput.classList.add("hidden");
   typeInput.classList.add("hidden");
   editKnowledgeInput.classList.add("hidden");
+  likelyChordsInput.classList.add("hidden");
   updateDetailsDisplay();
 }
 
@@ -1633,6 +1715,7 @@ function saveEditedTune(onComplete) {
   var keyVal = keyInput.value;
   var type = typeInput.value;
   var knowledge = editKnowledgeInput.value;
+  var likelyChords = likelyChordsForKey(keyVal);
 
   if (!selectedTuneKey) {
       alert("No tune selected.");
@@ -1647,7 +1730,8 @@ function saveEditedTune(onComplete) {
       links: links,
       key: keyVal,
       type: type,
-      knowledge: knowledge
+      knowledge: knowledge,
+      likelyChords: likelyChords
   }, function (error) {
       if (error) {
           reportWriteError(error);
@@ -1655,9 +1739,10 @@ function saveEditedTune(onComplete) {
           detailsDisplay.textContent = details;
           tuneData[selectedTuneKey] = {
             ...(tuneData[selectedTuneKey] || {}),
-            details, chords, name, link, links, key: keyVal, type, knowledge
+            details, chords, name, link, links, key: keyVal, type, knowledge, likelyChords
           };
           finishEditingTune();
+          showTuneChords(tuneData[selectedTuneKey]);
           if (onComplete) onComplete();
       }
   });
@@ -1752,26 +1837,51 @@ scrollToTopBtn.addEventListener("click", () => {
 
 
 
-function showChordDiagrams(chords) {
+// Show the tune's own chords, or fall back to the chords likely for its key
+function showTuneChords(tune) {
+    const own = (tune.chords || "").trim();
+    if (own) return showChordDiagrams(own);
+    showChordDiagrams(likelyChordsForKey(tune.key) || tune.likelyChords, "Likely chords");
+}
+
+function showChordDiagrams(chords, label) {
     const chordDiagramsContainer = document.getElementById("chordDiagramsContainer");
     chordDiagramsContainer.innerHTML = ""; // Clear previous diagrams
 
-    const chordList = chords.split(" ");
+    // Split on spaces/commas; files use "s" for sharps (F#m -> Fsm.png)
+    const chordList = (chords || "").split(/[\s,]+/).filter(Boolean);
+    if (chordList.length === 0) {
+        chordDiagramsContainer.classList.add("hidden");
+        return;
+    }
 
+    if (label) {
+        const caption = document.createElement("div");
+        caption.className = "chord-diagrams-label";
+        caption.textContent = label;
+        chordDiagramsContainer.appendChild(caption);
+    }
+
+    // Added in order straight away; each stays hidden until it loads, and is dropped if missing
     chordList.forEach(function(chord) {
         const img = new Image();
-        img.src = "assets/guitar/" + chord + ".png";
         img.alt = chord;
         img.classList.add("chord-diagram");
-
-        img.onload = function() {
-            chordDiagramsContainer.appendChild(img);
-        };
-
-        // Do nothing on error (skip the missing image)
+        img.style.visibility = "hidden";
+        img.onload = function() { img.style.visibility = ""; };
         img.onerror = function() {
             console.warn("Missing diagram for chord:", chord);
+            img.remove();
         };
+        img.src = "assets/" + currentMode + "/" + chord.replace("#", "s") + ".png";
+        img.title = "Click to hear " + chord;
+        img.addEventListener("click", function () {
+            if (!ChordSound.play(chord, currentMode)) return;
+            img.classList.remove("strummed");
+            void img.offsetWidth; // restart the animation on repeat clicks
+            img.classList.add("strummed");
+        });
+        chordDiagramsContainer.appendChild(img);
     });
 
     chordDiagramsContainer.classList.remove("hidden");
