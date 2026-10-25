@@ -114,6 +114,7 @@
     <!-- Tune Details Textarea -->
     
     <div id="chordDiagramsContainer"  class="hidden"></div>
+    <div id="chordSyncPanel" class="chord-sync hidden"></div>
 
     <!-- Chord Input Box -->
    
@@ -129,6 +130,7 @@
     <input type="text" id="linkInput" class="hidden" placeholder="Link">
     <label class="field field-key"><span class="field-label">Key:</span><input type="text" id="keyInput" class="hidden"></label>
     <label class="field field-likely-chords"><span class="field-label">Likely chords:</span><input type="text" id="likelyChordsInput" class="hidden" readonly placeholder="Filled in automatically"></label>
+    <label class="field field-chart-chords"><span class="field-label">Chart chords:</span><input type="text" id="chartChordsInput" class="hidden" readonly placeholder="Import from thesession.org in the chord panel"></label>
     <label class="field field-type"><span class="field-label">Type:</span><input type="text" id="typeInput" class="hidden"></label>
     <label class="field field-knowledge"><span class="field-label">Knowledge:</span><input type="number" id="knowledgeInput" class="hidden" placeholder="1–4"></label>
   </div>
@@ -144,9 +146,11 @@
   
   
   <!-- Link to external JavaScript file -->
-  <script src="chord-shapes.js?v=1"></script>
-  <script src="chord-sound.js?v=2"></script>
-  <script src="script.js?v=39"></script>
+  <script src="chord-chart.js?v=1"></script>
+  <script src="chord-shapes.js?v=2"></script>
+  <script src="chord-sound.js?v=4"></script>
+  <script src="script.js?v=41"></script>
+  <script src="chord-sync.js?v=21"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
 
 </body>

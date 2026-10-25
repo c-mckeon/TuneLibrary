@@ -53,6 +53,7 @@ const keyInput = document.getElementById("keyInput");
 const typeInput = document.getElementById("typeInput");
 const editKnowledgeInput = document.getElementById("knowledgeInput");
 const likelyChordsInput = document.getElementById("likelyChordsInput"); // read-only, filled from the key
+const chartChordsInput = document.getElementById("chartChordsInput"); // read-only, from the imported chord chart
 
 // Main chords for a key, e.g. "G" -> "G C D Em Am", "Ador" -> "Am G D C Em".
 // Accepts free text like "Em", "F#m", "A minor", "D dorian", "Dmix", "G/D".
@@ -224,6 +225,7 @@ function subscribeToMode() {
     tunesCache = snapshot.val();
     tunesLoaded = true;
     if (!isSetsMode || isSelectingSet) loadTunes();
+    if (typeof ChordSync !== "undefined") ChordSync.refresh();
   }, onDatabaseError);
 
   setsRef.on("value", function (snapshot) {
@@ -320,6 +322,7 @@ guitarBtn.addEventListener("click", function () {
   guitarBtn.classList.add("active");
   mandolinBtn.classList.remove("active");
   selectedTuneKey = null;
+  ChordSync.showTune(null);
   tuneDetailsContainer.classList.add("hidden");
   subscribeToMode();
 });
@@ -331,6 +334,7 @@ mandolinBtn.addEventListener("click", function () {
   mandolinBtn.classList.add("active");
   guitarBtn.classList.remove("active");
   selectedTuneKey = null;
+  ChordSync.showTune(null);
   tuneDetailsContainer.classList.add("hidden");
   subscribeToMode();
 });
@@ -384,6 +388,7 @@ saveTuneBtn.addEventListener("click", function () {
 refreshBtn.addEventListener("click", function () {
   console.log("Refreshing tunes list...");
   selectedTuneKey = null;
+  ChordSync.showTune(null);
   tuneDetailsContainer.classList.add("hidden");
   subscribeToMode();
 });
@@ -428,6 +433,7 @@ setsBtn.addEventListener("click", function () {
     isSelectingSet = false;
     selectedSetTuneKeys.clear();
     selectedTuneKey = null;
+    ChordSync.showTune(null);
     tuneDetailsContainer.classList.add("hidden");
     updateSetControls();
   }
@@ -525,6 +531,7 @@ youtubePlayerContainer.classList.remove("hidden");
         if (autoplay) youtubePlayer.playVideo();
         document.getElementById("cueInput").value = currentCue;
         markActiveSpeed(1);
+        ChordSync.onVideo(videoID);
         if (onReadyCallback) onReadyCallback();
       },
       onStateChange: onPlayerStateChange // Listen to state changes
@@ -1552,6 +1559,7 @@ function createTuneItem(key, tune) {
     chordInput.value = data.chords || "";
     chordInput.classList.add("hidden");
     showTuneChords(data);
+    ChordSync.showTune(key);
 
     // Cue input
     if (data.cue !== undefined) {
@@ -1661,6 +1669,7 @@ editDetailsBtn.addEventListener("click", function () {
   typeInput.classList.remove("hidden");
   editKnowledgeInput.classList.remove("hidden");
   likelyChordsInput.classList.remove("hidden");
+  chartChordsInput.classList.remove("hidden");
 
   detailsDisplay.classList.add("hidden");
   detailsControls.classList.add("hidden");
@@ -1678,6 +1687,8 @@ editDetailsBtn.addEventListener("click", function () {
   typeInput.value = tune.type || "";
   editKnowledgeInput.value = tune.knowledge || "";
   likelyChordsInput.value = likelyChordsForKey(keyInput.value);
+  // Live copy, so a chart imported after the tune was opened still shows
+  chartChordsInput.value = ChordSync.chartChords((tunesCache && tunesCache[selectedTuneKey]) || tune).join(" ");
 });
 
 keyInput.addEventListener("input", function () {
@@ -1703,6 +1714,7 @@ function finishEditingTune() {
   typeInput.classList.add("hidden");
   editKnowledgeInput.classList.add("hidden");
   likelyChordsInput.classList.add("hidden");
+  chartChordsInput.classList.add("hidden");
   updateDetailsDisplay();
 }
 
@@ -1841,6 +1853,8 @@ scrollToTopBtn.addEventListener("click", () => {
 function showTuneChords(tune) {
     const own = (tune.chords || "").trim();
     if (own) return showChordDiagrams(own);
+    const chartChords = ChordSync.chartChords(tune);
+    if (chartChords.length) return showChordDiagrams(chartChords.join(" "));
     showChordDiagrams(likelyChordsForKey(tune.key) || tune.likelyChords, "Likely chords");
 }
 
@@ -1868,12 +1882,23 @@ function showChordDiagrams(chords, label) {
         img.alt = chord;
         img.classList.add("chord-diagram");
         img.style.visibility = "hidden";
+        img.dataset.chord = chord;
         img.onload = function() { img.style.visibility = ""; };
-        img.onerror = function() {
-            console.warn("Missing diagram for chord:", chord);
-            img.remove();
+        // No diagram for e.g. Am9: try Am7, then Am, before giving up
+        const candidates = ChordChart.fallbacks(chord);
+        let tryIndex = 0;
+        const tryNext = function () {
+            const name = candidates[tryIndex++];
+            if (!name) {
+                console.warn("Missing diagram for chord:", chord);
+                img.remove();
+                return;
+            }
+            if (name !== chord) img.title = chord + " (diagram shows " + name + ")";
+            img.src = "assets/" + currentMode + "/" + name.replace("#", "s") + ".png";
         };
-        img.src = "assets/" + currentMode + "/" + chord.replace("#", "s") + ".png";
+        img.onerror = tryNext;
+        tryNext();
         img.title = "Click to hear " + chord;
         img.addEventListener("click", function () {
             if (!ChordSound.play(chord, currentMode)) return;
