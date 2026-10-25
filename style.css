@@ -1317,3 +1317,15 @@ body.mandolin-mode textarea#tuneDetails {
   font-size: 13px;
   text-align: center;
 }
+.chord-sync .tl-time {
+  position: absolute;
+  right: 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.8;
+  pointer-events: none;
+}
+.chord-sync .cs-mute {
+  min-width: 36px;
+  padding: 0 6px;
+}
