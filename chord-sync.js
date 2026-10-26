@@ -23,9 +23,8 @@ const ChordSync = (function () {
   let backing = "guitar";
   try { backing = localStorage.getItem("tunes.backing") || "guitar"; } catch (e) { /* storage blocked */ }
   if (!BACKINGS.some(b => b[0] === backing)) backing = "guitar";
-  // Play along in rhythm (true) or one chord per change (false); all instruments
-  let rhythmOn = true;
-  try { rhythmOn = (localStorage.getItem("tunes.rhythm") || localStorage.getItem("tunes.concertinaRhythm")) !== "off"; } catch (e) { /* storage blocked */ }
+  // Play along in rhythm (true) or one chord per change (false); all instruments. Always starts off.
+  let rhythmOn = false;
   // Volumes (0-100), remembered in this browser
   function storedVolume(name) {
     try { const v = Number(localStorage.getItem(name)); return localStorage.getItem(name) != null && v >= 0 && v <= 100 ? v : 100; }
@@ -1248,7 +1247,6 @@ const ChordSync = (function () {
     }));
     panel.querySelectorAll(".cs-rhythm").forEach(box => box.addEventListener("change", () => {
       rhythmOn = box.checked;
-      try { localStorage.setItem("tunes.rhythm", rhythmOn ? "on" : "off"); } catch (e) { /* storage blocked */ }
     }));
     if (tapping) updateTapInfo();
     wireTimeline();
@@ -1373,6 +1371,7 @@ const ChordSync = (function () {
     // Switch Play along on with this instrument (for this visit; the saved choice is kept), showing the section if hidden
     startBacking(instrument) {
       strumAlong = true;
+      rhythmOn = false; // autoplay backing is plain chords
       if (collapsed) {
         // Show the chords section again, so the backing can be heard
         collapsed = false;
