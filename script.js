@@ -318,16 +318,18 @@ database.ref(".info/connected").on("value", function (snapshot) {
 
 // ---------- Shareable links ----------
 // The address shows what's open, so it can be copied and sent:
-//   #guitar/<tune key>/2  = that tune's 2nd play button (opens it and starts the video)
-//   #guitar/<tune key>    = the tune selected
+//   #<tune key>/2         = that mandolin tune's 2nd play button (opens it and loads the video, paused)
+//   #<tune key>           = the tune selected
+//   #guitar/<tune key>/2  = the same for a guitar tune (mandolin is the default, so it isn't named)
 function setShareHash(key, linkIndex) {
-  const hash = key ? `#${currentMode}/${encodeURIComponent(key)}${linkIndex != null ? "/" + (linkIndex + 1) : ""}` : "";
+  const mode = currentMode === "mandolin" ? "" : currentMode + "/";
+  const hash = key ? `#${mode}${encodeURIComponent(key)}${linkIndex != null ? "/" + (linkIndex + 1) : ""}` : "";
   history.replaceState(null, "", location.pathname + location.search + hash);
 }
 
 function parseShareHash() {
-  const m = location.hash.match(/^#(guitar|mandolin)\/([^/]+)(?:\/(\d+))?$/);
-  return m ? { mode: m[1], key: decodeURIComponent(m[2]), link: m[3] ? Number(m[3]) - 1 : null } : null;
+  const m = location.hash.match(/^#(?:(guitar|mandolin)\/)?([^/]+)(?:\/(\d+))?$/);
+  return m ? { mode: m[1] || "mandolin", key: decodeURIComponent(m[2]), link: m[3] ? Number(m[3]) - 1 : null } : null;
 }
 
 // Opened from a shared link: use its instrument from the start
@@ -339,7 +341,7 @@ if (pendingShare && pendingShare.mode !== currentMode) {
   mandolinBtn.classList.toggle("active", currentMode === "mandolin");
 }
 
-// Once the tunes have loaded: open the shared tune, start its video and scroll to the player
+// Once the tunes have loaded: open the shared tune, load its video (paused) and scroll to the player
 function openSharedLink() {
   const share = pendingShare;
   pendingShare = null;
@@ -356,8 +358,19 @@ function openSharedLink() {
   if (!row) return;
   const content = row.closest(".knowledge-content");
   if (content && content.style.display === "none") content.previousElementSibling.click(); // unfold its section
-  const playButton = share.link != null && row.querySelector(`.inline-link-btn[data-link-index="${share.link}"]`);
-  if (playButton) playButton.click(); else row.click();
+  // Select the tune and load the shared video paused; the backing is switched on as from
+  // a yellow play button, so it plays along once they press play
+  row.click();
+  const links = getTuneLinks(tunesCache[share.key]).filter(link => link.url.trim() !== "").slice(0, 4);
+  const link = share.link != null ? links[share.link] : null;
+  const videoID = link && getYouTubeVideoID(link.url);
+  const playButton = !!videoID;
+  if (videoID) {
+    setShareHash(share.key, share.link);
+    const button = row.querySelector(`.inline-link-btn[data-link-index="${share.link}"]`);
+    if (autoBackingInput.checked && button && button.classList.contains("has-timings")) ChordSync.startBacking("piano");
+    loadYouTubeAPI(() => createYouTubePlayer(videoID, Number(link.start) || currentCue, false));
+  }
   // The player appears once YouTube's script has loaded
   let tries = 0;
   const scrollWhenReady = () => {
@@ -584,6 +597,9 @@ youtubePlayerContainer.classList.remove("hidden");
     autoplay: autoplay ? 1 : 0,
     playsinline: 1
   };
+  // Not autoplaying: start the video at the cue point when played, without seeking now
+  // (seeking an unstarted video makes YouTube start playing it)
+  if (!autoplay && cueTime > 0) playerVars.start = Math.floor(cueTime);
   if (window.location.protocol === "http:" || window.location.protocol === "https:") {
     playerVars.origin = window.location.origin;
   }
@@ -595,8 +611,10 @@ youtubePlayerContainer.classList.remove("hidden");
     playerVars: playerVars,
     events: {
       onReady: (event) => {
-        youtubePlayer.seekTo(cueTime, true);
-        if (autoplay) youtubePlayer.playVideo();
+        if (autoplay) {
+          youtubePlayer.seekTo(cueTime, true);
+          youtubePlayer.playVideo();
+        }
         document.getElementById("cueInput").value = currentCue;
         markActiveSpeed(1);
         ChordSync.onVideo(videoID);
