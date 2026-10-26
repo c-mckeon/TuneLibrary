@@ -401,12 +401,22 @@ function updateSetControls() {
   document.getElementById("loopBtn").classList.toggle("hidden", isSetsMode);
   document.getElementById("loopFields").classList.toggle("hidden", isSetsMode);
   showInProgressToggle.classList.toggle("hidden", isSetsMode);
+  autoBackingToggle.classList.toggle("hidden", isSetsMode);
 }
 
 // "Show In-Progress" switch (off by default): when off, only Repertoire is shown
 let repertoireOnly = true;
 const showInProgressToggle = document.getElementById("showInProgressToggle");
 const showInProgressInput = document.getElementById("showInProgressInput");
+
+// "Autoplay Backing" switch (on by default, remembered in this browser): playing a video
+// that has chord timings also starts Play along on piano
+const autoBackingToggle = document.getElementById("autoBackingToggle");
+const autoBackingInput = document.getElementById("autoBackingInput");
+try { autoBackingInput.checked = localStorage.getItem("tunes.autoBacking") !== "off"; } catch (e) { /* storage blocked */ }
+autoBackingInput.addEventListener("change", function () {
+  try { localStorage.setItem("tunes.autoBacking", autoBackingInput.checked ? "on" : "off"); } catch (e) { /* storage blocked */ }
+});
 
 showInProgressInput.addEventListener("change", function () {
   repertoireOnly = !showInProgressInput.checked;
@@ -817,6 +827,17 @@ function setupPlayPauseButton() {
     }
   });
 }
+
+// Space plays / pauses (instead of scrolling the page), except while typing
+// or while syncing chords, where Space marks the next bar
+document.addEventListener("keydown", function (e) {
+  if (e.code !== "Space" || e.repeat || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (e.target.closest && e.target.closest("input, textarea, select, [contenteditable]")) return;
+  if (typeof ChordSync !== "undefined" && ChordSync.isTapping()) return;
+  e.preventDefault();
+  if (document.activeElement && document.activeElement.tagName === "BUTTON") document.activeElement.blur(); // don't also press the focused button
+  document.getElementById("playPauseBtn").click();
+});
 
 // The player the controls act on: the playing set video while a set is open, otherwise the tune video
 function activePlayer() {
@@ -1485,6 +1506,12 @@ function createTuneItem(key, tune) {
   const tuneLinks = getTuneLinks(tune).filter(link => link.url.trim() !== "").slice(0, 4);
   const hasLink = tuneLinks.length > 0;
 
+  // A link has backing timings when the tune has a chord chart and a sync saved for that video
+  function hasChordTimings(tune, link) {
+    const sync = tune.chordChart && tune.chordChart.abc && tune.chordSync && tune.chordSync[getYouTubeVideoID(link.url)];
+    return !!(sync && ((sync.points && sync.points.length) || (sync.taps && sync.taps.length)));
+  }
+
   // Knowledge level shown as a small dot; selection as a highlight
   const knowledge = parseInt(tune.knowledge) || 0;
 
@@ -1501,7 +1528,7 @@ function createTuneItem(key, tune) {
     <div class="tune-key">${escapeHtml(tune.key || "")}</div>
     <div class="tune-type">${escapeHtml(tune.type || "")}</div>
     <div class="inline-link-buttons">
-      ${tuneLinks.map((link, index) => `<button class="inline-link-btn available" title="Play saved link ${index + 1}" data-link-index="${index}" data-key="${key}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><path d="M6.3 5v6L11 8z" fill="currentColor" stroke="none"/></svg></button>`).join("")}
+      ${tuneLinks.map((link, index) => `<button class="inline-link-btn available${hasChordTimings(tune, link) ? " has-timings" : ""}" title="Play saved link ${index + 1}${hasChordTimings(tune, link) ? " (chord timings saved)" : ""}" data-link-index="${index}" data-key="${key}"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="1.5" y="1.5" width="13" height="13" rx="2.5"/><path d="M6.3 5v6L11 8z" fill="currentColor" stroke="none"/></svg></button>`).join("")}
     </div>
   `;
 
@@ -1583,6 +1610,9 @@ function createTuneItem(key, tune) {
       // Select this tune row
       const row = document.querySelector(`[data-key="${this.dataset.key}"]`);
       if (row) row.click();
+
+      // A video with chord timings: start the piano backing too
+      if (autoBackingInput.checked && this.classList.contains("has-timings")) ChordSync.startBacking("piano");
 
       // Play via YouTube IFrame API
       const link = tuneLinks[Number(this.dataset.linkIndex)];
@@ -1909,6 +1939,11 @@ function showChordDiagrams(chords, label) {
         chordDiagramsContainer.appendChild(img);
     });
 
+    // 7 or 8 chords: shrink the diagrams so they all fit on one line
+    const diagramCount = chordDiagramsContainer.querySelectorAll(".chord-diagram").length;
+    const oneLine = diagramCount >= 7 && diagramCount <= 8;
+    chordDiagramsContainer.classList.toggle("one-line", oneLine);
+    chordDiagramsContainer.style.setProperty("--diagrams", oneLine ? diagramCount : "");
     chordDiagramsContainer.classList.remove("hidden");
 }
 

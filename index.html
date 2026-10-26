@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tune Library</title>
   <!-- Link to external CSS -->
-  <link rel="stylesheet" type="text/css" href="style.css?v=46">
+  <link rel="stylesheet" type="text/css" href="style.css?v=69">
   <!-- Firebase App (the core Firebase SDK) -->
   <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
   <!-- Firebase Database -->
@@ -42,6 +42,11 @@
         <input type="checkbox" id="showInProgressInput">
         <span class="switch-track" aria-hidden="true"></span>
         <span class="switch-label">Show In-Progress</span>
+      </label>
+      <label id="autoBackingToggle" class="switch" title="Clicking a yellow play button (a video with chord timings) starts Play along on piano">
+        <input type="checkbox" id="autoBackingInput" checked>
+        <span class="switch-track" aria-hidden="true"></span>
+        <span class="switch-label">Autoplay Backing</span>
       </label>
       
     </div>
@@ -148,9 +153,9 @@
   <!-- Link to external JavaScript file -->
   <script src="chord-chart.js?v=1"></script>
   <script src="chord-shapes.js?v=2"></script>
-  <script src="chord-sound.js?v=4"></script>
-  <script src="script.js?v=41"></script>
-  <script src="chord-sync.js?v=27"></script>
+  <script src="chord-sound.js?v=14"></script>
+  <script src="script.js?v=45"></script>
+  <script src="chord-sync.js?v=67"></script>
   <script src="https://www.youtube.com/iframe_api"></script>
 
 </body>

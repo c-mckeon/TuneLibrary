@@ -431,6 +431,17 @@ textarea {
   background: transparent;
   color: var(--accent);
 }
+/* Play buttons for videos with saved chord timings */
+.inline-link-btn.has-timings,
+.inline-link-btn.has-timings:hover {
+  color: #000;
+}
+.inline-link-btn.has-timings svg rect {
+  fill: #efdc8a;
+}
+.inline-link-btn.has-timings:hover svg rect {
+  fill: #e3cd72;
+}
 
 /* ---------- Sets list ---------- */
 .sets-content {
@@ -1121,6 +1132,7 @@ body.mandolin-mode textarea#tuneDetails {
   margin-left: -7px;
   cursor: ew-resize;
   touch-action: none;
+  -webkit-tap-highlight-color: transparent;
   z-index: 2;
 }
 .chord-sync .tl-mark::after {
@@ -1138,11 +1150,6 @@ body.mandolin-mode textarea#tuneDetails {
 }
 .chord-sync .tl-mark.end::after {
   background: var(--danger);
-}
-.chord-sync .tl-mark:hover::after,
-.chord-sync .tl-mark.dragging::after {
-  left: 5px;
-  width: 5px;
 }
 .chord-sync .tl-playhead {
   position: absolute;
@@ -1220,21 +1227,38 @@ body.mandolin-mode textarea#tuneDetails {
 .chord-sync .tl-mark {
   cursor: default;
 }
-.chord-sync.tl-alt .tl-mark {
+.chord-sync.tl-alt .tl-mark,
+.chord-sync.tl-move .tl-mark {
   cursor: ew-resize;
 }
+/* Move / Jump toggles (stand-ins for Alt and Ctrl on phones) */
+.chord-sync .tl-mode.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chord-sync.tl-jumping .cs-timeline {
+  cursor: pointer;
+}
 
-/* First bar of every part in orange (timeline and chart) */
+/* First bar of every part, coloured by part (1st orange, 2nd green, 3rd blue, 4th purple),
+   fading from left to right; timeline and chart */
+.chord-sync .pc-0 { --pc: 255, 155, 40;  --pc-text: #e88200; }
+.chord-sync .pc-1 { --pc: 40, 200, 100;  --pc-text: #149a48; }
+.chord-sync .pc-2 { --pc: 40, 140, 255;  --pc-text: #1a73e8; }
+.chord-sync .pc-3 { --pc: 160, 90, 255;  --pc-text: #8a3ffc; }
 .chord-sync .tl-bar.tl-part-start,
-.chord-sync .cs-bar[data-bar="0"] {
-  background: #fdebd3;
-  border-left: 3px solid #e8892a;
+.chord-sync .cs-part .cs-bar[data-bar="0"] {
+  background-image: linear-gradient(to right, rgba(var(--pc), var(--pc-a, 0.3)), rgba(var(--pc), 0)); /* over the bar's own background, so it fades to that */
+}
+.chord-sync .tl-bar.tl-part-start {
+  border-left: var(--tl-hair, 1px) solid var(--border-strong);
 }
 .chord-sync .tl-part {
-  color: #c46d17;
+  color: var(--pc-text);
 }
 .chord-sync .tl-bar.tl-part-start.current,
-.chord-sync .cs-bar[data-bar="0"].current {
+.chord-sync .cs-part .cs-bar[data-bar="0"].current {
   background: var(--accent);
   color: #fff;
 }
@@ -1290,7 +1314,7 @@ body.mandolin-mode textarea#tuneDetails {
   color: #2f7d4f;
 }
 
-/* Chord names in the chart: click to silence in Strum along */
+/* Chord names in the chart: click to silence in Play along */
 .chord-sync .cs-chart:not(.cs-tapping) .cs-chord-name {
   cursor: pointer;
   border-radius: 3px;
@@ -1328,4 +1352,158 @@ body.mandolin-mode textarea#tuneDetails {
 .chord-sync .cs-mute {
   min-width: 36px;
   padding: 0 6px;
+}
+
+/* Editing buttons only show after pressing Edit */
+.chord-sync:not(.cs-editing) .cs-edit-only {
+  display: none !important;
+}
+.chord-sync .cs-head-tools {
+  display: inline-flex;
+  gap: 6px;
+}
+/* Play / mute as line icons */
+.chord-sync .cs-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.chord-sync .cs-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Video / backing volume sliders */
+.chord-sync .cs-volumes {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.chord-sync .cs-volume {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+}
+.chord-sync .cs-volume input[type="range"] {
+  width: 64px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+/* Steady tempo: the timeline and its tools are hidden but keep their space, so the page doesn't jump */
+.chord-sync.cs-steady-on .cs-timeline,
+.chord-sync.cs-steady-on .tl-mode,
+.chord-sync.cs-steady-on .tl-zoom {
+  visibility: hidden;
+}
+
+/* Buttons joined into one group (Move|Jump, −|+) */
+.chord-sync .cs-btn-group {
+  display: inline-flex;
+}
+.chord-sync .cs-btn-group > button {
+  margin: 0;
+}
+.chord-sync .cs-btn-group > button:not(:first-child) {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.chord-sync .cs-btn-group > button:not(:last-child) {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.chord-sync .cs-btn-group > button.active {
+  position: relative;
+  z-index: 1;
+}
+
+/* Edit row: everything behind the Edit button */
+.chord-sync .cs-edit-help {
+  font-size: 12px;
+  margin-top: -2px;
+}
+
+/* "Blue lines" unticked: the markers you set look like the grey ones */
+.chord-sync.tl-hide-manual .tl-mark.manual::after {
+  background: #b8bec6;
+}
+
+/* Zoomed out: chords that don't fit side by side stack on two lines */
+.chord-sync .tl-chord.tl-cramped {
+  padding-left: 3px;
+  font-size: 11px;
+}
+
+/* All marker lines the same thin width, in whole screen pixels so none look thicker.
+   The marker's left is where its line starts; the grab area spreads 7px either side. */
+/* Grab area: just a few pixels either side of the line */
+.chord-sync .tl-mark {
+  width: 9px;
+  margin-left: -4px;
+}
+.chord-sync .tl-mark::after {
+  left: 4px;
+  width: var(--tl-line, 2px);
+  border-radius: 0;
+}
+.chord-sync .tl-bar {
+  border-left-width: var(--tl-hair, 1px);
+}
+
+/* "Hide": only the heading (with Show) stays */
+.chord-sync.cs-collapsed > :not(.cs-head),
+.chord-sync.cs-collapsed .cs-edit {
+  display: none !important;
+}
+
+/* Bars and markers can be dragged straight away with a mouse; on touch only with Move on
+   (otherwise a swipe scrolls the page) */
+.chord-sync .tl-mark {
+  cursor: ew-resize;
+  touch-action: pan-x pan-y;
+}
+.chord-sync .tl-bar {
+  cursor: default;
+}
+.chord-sync .cs-timeline {
+  touch-action: pan-x pan-y;
+}
+.chord-sync.tl-move .tl-mark {
+  touch-action: none;
+}
+.chord-sync.tl-jumping .tl-bar,
+.chord-sync.tl-jumping .tl-mark {
+  cursor: pointer;
+}
+
+/* 7 or 8 chord diagrams: shrink them to share one line */
+#chordDiagramsContainer.one-line {
+  gap: 6px;
+}
+#chordDiagramsContainer.one-line .chord-diagram {
+  width: calc((100% - (var(--diagrams) - 1) * 6px) / var(--diagrams));
+  max-width: 100px;
+  min-width: 0;
+}
+
+/* "Hide controls": everything under the chord chart (not while syncing) */
+.chord-sync.cs-controls-hidden .cs-sync,
+.chord-sync.cs-controls-hidden .cs-timeline-tools,
+.chord-sync.cs-controls-hidden .cs-timeline,
+.chord-sync.cs-controls-hidden .cs-transport {
+  display: none !important;
+}
+.chord-sync.cs-collapsed .cs-controls-toggle {
+  display: none !important;
+}
+
+/* Each bar in the chord chart plays from there */
+.chord-sync .cs-chart:not(.cs-tapping) .cs-bar {
+  cursor: pointer;
+}
+.chord-sync .cs-chart:not(.cs-tapping) .cs-bar:hover {
+  filter: brightness(0.96);
 }

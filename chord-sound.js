@@ -7,11 +7,13 @@ const ChordSound = (function () {
     // brightness: how sharp the pluck is (lower = softer); lowpass: tone cutoff in Hz; strumGap: seconds between strings
     guitar:   { tuning: [40, 45, 50, 55, 59, 64], sustain: 3.0, length: 2.5, brightness: 0.3, courses: 1, strumGap: 0.009, lowpass: 3000 },
     // Mandolin strings come in pairs, so each note is played twice, slightly out of tune with itself
-    mandolin: { tuning: [55, 62, 69, 76],         sustain: 1.4, length: 1.6, brightness: 0.5, courses: 2, strumGap: 0.011, lowpass: 4500 }
+    mandolin: { tuning: [55, 62, 69, 76],         sustain: 1.9, length: 2.1, brightness: 0.7, courses: 2, strumGap: 0.013, lowpass: 7000 }
   };
   const FLAT_TO_SHARP = { Db: "Cs", Eb: "Ds", Gb: "Fs", Ab: "Gs", Bb: "As" };
 
   let ctx = null, master = null;
+  let volume = 1; // backing volume, 0..1 (set by the slider)
+  const MASTER_LEVEL = 0.8;
   let ringing = []; // voices from the last strum, cut short by the next one
   const bufferCache = {};
 
@@ -20,7 +22,7 @@ const ChordSound = (function () {
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       const compressor = ctx.createDynamicsCompressor();
       master = ctx.createGain();
-      master.gain.value = 0.8;
+      master.gain.value = MASTER_LEVEL * volume;
       master.connect(compressor);
       compressor.connect(ctx.destination);
     }
@@ -175,7 +177,29 @@ const ChordSound = (function () {
     return buf;
   }
 
-  function playPiano(chord) {
+  // Strike some piano notes at `when`; returns the voices so they can be damped later
+  function pianoStrike(midis, when, level, out) {
+    const voices = [];
+    midis.forEach((midi, k) => {
+      // Each note on two very slightly detuned "strings", played almost together
+      [-2, 2].forEach(detune => {
+        const source = ctx.createBufferSource();
+        source.buffer = pianoBuffer(midi);
+        source.detune.value = detune;
+        const gain = ctx.createGain();
+        gain.gain.value = level;
+        source.connect(gain);
+        gain.connect(out);
+        source.start(when + k * 0.006);
+        const voice = { source, gain };
+        ringing.push(voice);
+        voices.push(voice);
+      });
+    });
+    return voices;
+  }
+
+  function playPiano(chord, rhythm) {
     const notes = pianoVoicing(chord);
     if (!notes) return false;
     audio();
@@ -185,21 +209,181 @@ const ChordSound = (function () {
     tone.type = "lowpass";
     tone.frequency.value = 3500;
     tone.connect(master);
-    notes.forEach((midi, k) => {
-      // Each note on two very slightly detuned "strings", played almost together
-      [-2, 2].forEach(detune => {
-        const source = ctx.createBufferSource();
-        source.buffer = pianoBuffer(midi);
-        source.detune.value = detune;
-        const gain = ctx.createGain();
-        gain.gain.value = (k === 0 ? 0.55 : 0.4) / Math.sqrt(notes.length);
-        source.connect(gain);
-        gain.connect(tone);
-        source.start(now + k * 0.006);
-        ringing.push({ source, gain });
+    const n = Math.sqrt(notes.length);
+
+    // Rhythm: bass note on the beat (root, then the fifth below), chord on the off-beat ("oom-pah")
+    const hits = rhythm && !rhythm.held ? grooveHits(rhythm, now) : [];
+    if (hits.length) {
+      const bass = notes[0], upper = notes.slice(1);
+      let previous = [];
+      hits.forEach(hit => {
+        damp(previous, hit.when, 0.05);
+        previous = hit.kind === "bass"
+          ? pianoStrike([hit.beat % 2 ? bass + 7 : bass], hit.when, hit.beat === 0 ? 0.5 : 0.42, tone)
+          : pianoStrike(upper, hit.when, 0.36 / Math.sqrt(upper.length), tone);
       });
+      return true;
+    }
+
+    pianoStrike([notes[0]], now, 0.55 / n, tone);
+    pianoStrike(notes.slice(1), now + 0.006, 0.4 / n, tone);
+    return true;
+  }
+
+  // ---------- concertina ----------
+
+  // Free reeds: a bright, buzzy tone with every harmonic present (odd ones a little stronger)
+  let reedWave = null;
+  function reed() {
+    if (!reedWave) {
+      const count = 20;
+      const real = new Float32Array(count + 1), imag = new Float32Array(count + 1);
+      for (let h = 1; h <= count; h++) imag[h] = (h % 2 ? 1 : 0.6) / Math.pow(h, 1.1);
+      reedWave = ctx.createPeriodicWave(real, imag);
+    }
+    return reedWave;
+  }
+
+  // The chord's notes (up to the 7th) close together between G3 and F#5, with the root an octave below
+  function concertinaVoicing(name) {
+    const c = chordTones(name);
+    if (!c) return null;
+    const base = 55 + (c.root - 7 + 12) % 12;                       // G3..F#4
+    const bass = c.bass != null ? 43 + (c.bass - 7 + 12) % 12 : base - 12;
+    return [bass].concat(c.tones.filter(t => t < 12).map(t => base + t));
+  }
+
+  // Where the bass notes and chord stabs fall in a bar, by tune type, as fractions of a beat.
+  // Off-beats are pushed a little late in reels and hornpipes for a swung, jaunty feel.
+  const GROOVES = {
+    reel:        { beats: 2, hits: [[0, "bass"], [0.54, "chord"]] },
+    march:       { beats: 2, hits: [[0, "bass"], [0.5, "chord"]] },
+    polka:       { beats: 2, hits: [[0, "bass"], [0.5, "chord"]] },
+    hornpipe:    { beats: 2, hits: [[0, "bass"], [0.64, "chord"]] },
+    barndance:   { beats: 2, hits: [[0, "bass"], [0.62, "chord"]] },
+    strathspey:  { beats: 2, hits: [[0, "bass"], [0.66, "chord"]] },
+    jig:         { beats: 2, hits: [[0, "bass"], [2 / 3, "chord"]] },
+    "slip jig":  { beats: 3, hits: [[0, "bass"], [2 / 3, "chord"]] },
+    slide:       { beats: 4, hits: [[0, "bass"], [2 / 3, "chord"]] },
+    "three-two": { beats: 3, hits: [[0, "bass"], [0.55, "chord"]] },
+    waltz:       { beats: 1, hits: [[0, "bass"], [1 / 3, "chord"], [2 / 3, "chord"]] },
+    mazurka:     { beats: 1, hits: [[0, "bass"], [1 / 3, "chord"], [2 / 3, "chord"]] }
+  };
+
+  // The hits (bass on the beat, chord on the off-beat) that fall in the rest of the current chord.
+  // rhythm: { barSeconds, frac (where in the bar we are now), from, to (the chord's span in the bar), type }
+  // Each hit: { when (audio time), kind: "bass"|"chord", beat (0 = first beat of the bar), gap (seconds to the next hit) }
+  function grooveHits(rhythm, now) {
+    if (!rhythm || !(rhythm.barSeconds > 0.2)) return [];
+    const groove = GROOVES[(rhythm.type || "").toLowerCase()] || GROOVES.reel;
+    const beatSeconds = rhythm.barSeconds / groove.beats;
+    const hits = [];
+    for (let b = 0; b < groove.beats; b++) {
+      groove.hits.forEach(([at, kind], h) => {
+        const f = (b + at) / groove.beats;                       // position in the bar
+        if (f < rhythm.from - 0.02 || f >= rhythm.to - 0.001) return;
+        const delay = (f - rhythm.frac) * rhythm.barSeconds;
+        if (delay < -0.08) return;                               // already gone by
+        const nextAt = h + 1 < groove.hits.length ? groove.hits[h + 1][0] : 1;
+        hits.push({ when: now + Math.max(0, delay), kind, beat: b, gap: (nextAt - at) * beatSeconds });
+      });
+    }
+    return hits;
+  }
+
+  // Quickly quieten earlier voices at `when` (a hand re-striking or lifting off)
+  function damp(voices, when, speed = 0.03) {
+    voices.forEach(v => {
+      v.gain.gain.setTargetAtTime(0, when, speed);
+      v.source.stop(when + 0.3);
+    });
+  }
+
+  // One short reed note, scheduled at `when`
+  // decay (optional): instead of holding for `length`, die away gradually like a piano note
+  // (seconds to fall to about a third; the next chord still cuts it off)
+  function reedNote(midi, when, length, level, out, decay) {
+    const source = ctx.createOscillator();
+    source.setPeriodicWave(reed());
+    source.frequency.value = midiToFreq(midi);
+    source.detune.value = Math.random() * 4 - 2;   // reeds are never perfectly matched
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(level, when + 0.012);
+    if (decay) {
+      gain.gain.setTargetAtTime(0, when + 0.012, decay);
+      length = decay * 6; // inaudible by then
+    } else {
+      gain.gain.setTargetAtTime(level * 0.75, when + 0.012, 0.06);  // a little push of the bellows, then settle
+      gain.gain.setTargetAtTime(0, when + length, 0.09);
+    }
+    source.connect(gain);
+    gain.connect(out);
+    source.start(when);
+    source.stop(when + length + 0.5);
+    ringing.push({ source, gain });
+  }
+
+  // Bass on the beat (root, then the fifth below on the next beat), short chord stabs on the off-beats.
+  // rhythm: { barSeconds, frac (where in the bar we are now), from, to (the chord's span in the bar), type }
+  // Without rhythm (e.g. trying the sound) it plays one short bass + chord.
+  function playConcertina(chord, rhythm) {
+    const notes = concertinaVoicing(chord);
+    if (!notes) return false;
+    audio();
+    const now = ctx.currentTime + 0.01;
+    dampRinging(now);
+    const tone = ctx.createBiquadFilter();
+    tone.type = "lowpass";
+    tone.frequency.value = 2600;
+    tone.Q.value = 0.5;
+    tone.connect(master);
+    const bass = notes[0], upper = notes.slice(1);
+    const chordLevel = 0.3 / Math.sqrt(upper.length);
+    const stab = (when, length) => upper.forEach(m => reedNote(m, when, length, chordLevel, tone));
+
+    // Rhythm off: one chord (bass softly underneath) that dies away like the piano, a little slower
+    if (rhythm && rhythm.held) {
+      const decay = 1.0;
+      reedNote(bass, now, 0, 0.12, tone, decay);
+      upper.forEach(m => reedNote(m, now, 0, chordLevel, tone, decay));
+      return true;
+    }
+
+    if (!rhythm || !(rhythm.barSeconds > 0.2)) {
+      reedNote(bass, now, 0.35, 0.34, tone);
+      stab(now + 0.2, 0.3);
+      return true;
+    }
+
+    grooveHits(rhythm, now).forEach(hit => {
+      const length = Math.max(0.06, hit.gap * (hit.kind === "bass" ? 0.9 : 0.85));
+      if (hit.kind === "bass") reedNote(hit.beat % 2 ? bass - 5 : bass, hit.when, length, hit.beat === 0 ? 0.14 : 0.11, tone);
+      else stab(hit.when, length);
     });
     return true;
+  }
+
+  // Metronome tick `delay` seconds from now: a short, soft blip, higher on the first beat of the bar
+  function click(delay, accent) {
+    audio();
+    const when = ctx.currentTime + 0.01 + Math.max(0, delay);
+    const osc = ctx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.value = accent ? 1760 : 1320;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0, when);
+    gain.gain.linearRampToValueAtTime(accent ? 0.5 : 0.32, when + 0.002);
+    gain.gain.setTargetAtTime(0, when + 0.002, 0.012);
+    osc.connect(gain);
+    gain.connect(master);
+    osc.start(when);
+    osc.stop(when + 0.1);
+  }
+
+  // Cut off whatever is sounding (e.g. the video was paused)
+  function stop() {
+    if (ctx) dampRinging(ctx.currentTime);
   }
 
   // Build the piano notes for some chords ahead of time, a little at a time, so the first chord isn't late
@@ -219,8 +403,9 @@ const ChordSound = (function () {
 
   // ---------- guitar / mandolin ----------
 
-  function play(chord, instrument) {
-    if (instrument === "piano") return playPiano(chord);
+  function play(chord, instrument, rhythm) {
+    if (instrument === "piano") return playPiano(chord, rhythm);
+    if (instrument === "concertina") return playConcertina(chord, rhythm);
     const inst = INSTRUMENTS[instrument];
     const shapes = (typeof CHORD_SHAPES !== "undefined" && CHORD_SHAPES[instrument]) || {};
     // Chords we have no shape for (e.g. Am9) play their nearest simpler chord (Am7, then Am)
@@ -239,13 +424,33 @@ const ChordSound = (function () {
     tone.frequency.value = inst.lowpass;
     tone.connect(master);
 
-    const played = frets.filter(f => f >= 0).length;
-    let k = 0;
-    frets.forEach((fret, string) => {
-      if (fret < 0) return;
+    // Rhythm: a full down-strum on the beat, a lighter up-strum across the top strings on the off-beat
+    const hits = rhythm && !rhythm.held ? grooveHits(rhythm, now) : [];
+    if (hits.length) {
+      let previous = [];
+      hits.forEach(hit => {
+        damp(previous, hit.when, 0.04);
+        previous = hit.kind === "bass"
+          ? strum(frets, inst, hit.when, tone, { level: hit.beat === 0 ? 1 : 0.85 })
+          : strum(frets, inst, hit.when, tone, { up: true, top: inst.tuning.length > 4 ? 4 : 3, level: 0.55 });
+      });
+      return true;
+    }
+
+    strum(frets, inst, now, tone);
+    return true;
+  }
+
+  // Strum a chord shape at `when`: low to high, or (up) high to low over just the top strings.
+  // Returns the voices so they can be damped by the next strum.
+  function strum(frets, inst, when, out, { up = false, top = 0, level = 1 } = {}) {
+    let strings = frets.map((fret, string) => ({ fret, string })).filter(s => s.fret >= 0);
+    if (top) strings = strings.slice(-top);
+    if (up) strings.reverse();
+    const voices = [];
+    strings.forEach(({ fret, string }, k) => {
       const freq = midiToFreq(inst.tuning[string] + fret);
-      const when = now + k * inst.strumGap;
-      k++;
+      const at = when + k * inst.strumGap * (up ? 0.7 : 1);
       for (let c = 0; c < inst.courses; c++) {
         // Paired strings: about 3 cents apart, which gives the mandolin shimmer
         const detune = inst.courses > 1 ? (c === 0 ? -3 : 3) : 0;
@@ -253,15 +458,22 @@ const ChordSound = (function () {
         source.buffer = pluckBuffer(freq, inst);
         source.detune.value = detune;
         const gain = ctx.createGain();
-        gain.gain.value = 0.9 / Math.sqrt(played * inst.courses);
+        gain.gain.value = level * 0.9 / Math.sqrt(strings.length * inst.courses);
         source.connect(gain);
-        gain.connect(tone);
-        source.start(when + c * 0.004);
-        ringing.push({ source, gain });
+        gain.connect(out);
+        source.start(at + c * 0.004);
+        const voice = { source, gain };
+        ringing.push(voice);
+        voices.push(voice);
       }
     });
-    return true;
+    return voices;
   }
 
-  return { play, prepare, chordTones };
+  function setVolume(v) {
+    volume = Math.max(0, Math.min(1, v));
+    if (master) master.gain.setTargetAtTime(MASTER_LEVEL * volume, ctx.currentTime, 0.02);
+  }
+
+  return { play, prepare, chordTones, setVolume, stop, click };
 })();

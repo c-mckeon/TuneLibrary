@@ -15,12 +15,26 @@ const ChordSync = (function () {
   let chart = null;         // parsed chart of the selected tune
   let tapping = null;       // { taps, end, before } while syncing
   let strumAlong = false;
-  let steadyTempo = false;  // follow at the average speed instead of every marker
-  // Instrument Strum along plays; remembered in this browser only
-  const BACKINGS = [["guitar", "Guitar"], ["mandolin", "Mandolin"], ["piano", "Piano"]];
+  let metronome = false;
+  let steadyTempo = false;
+  let mutedBySteady = false; // Steady tempo muted the video, so unticking it unmutes  // follow at the average speed instead of every marker
+  // Instrument Play along plays; remembered in this browser only
+  const BACKINGS = [["guitar", "Guitar"], ["mandolin", "Mandolin"], ["piano", "Piano"], ["concertina", "Concertina"]];
   let backing = "guitar";
   try { backing = localStorage.getItem("tunes.backing") || "guitar"; } catch (e) { /* storage blocked */ }
   if (!BACKINGS.some(b => b[0] === backing)) backing = "guitar";
+  // Play along in rhythm (true) or one chord per change (false); all instruments
+  let rhythmOn = true;
+  try { rhythmOn = (localStorage.getItem("tunes.rhythm") || localStorage.getItem("tunes.concertinaRhythm")) !== "off"; } catch (e) { /* storage blocked */ }
+  // Volumes (0-100), remembered in this browser
+  function storedVolume(name) {
+    try { const v = Number(localStorage.getItem(name)); return localStorage.getItem(name) != null && v >= 0 && v <= 100 ? v : 100; }
+    catch (e) { return 100; }
+  }
+  let videoVolume = storedVolume("tunes.videoVolume");
+  let backingVolume = storedVolume("tunes.backingVolume");
+  ChordSound.setVolume(backingVolume / 100);
+  let volumeSetOn = null; // the player the video volume was last applied to
   let lastShown = "";       // to only update the page when the position changes
   let lastStrummed = null; // chord entry last strummed along
 
@@ -165,7 +179,9 @@ const ChordSync = (function () {
       beat: (firstBarOf(occ) + bar) + ":" + ci, // identifies this chord entry, so repeats of the same chord count separately
       muted: isMuted(muteKey(part.part, bar, ci)),
       occurrence: occ, label: part.label, part: part.part, bar, bars: part.bars.length,
-      round: Math.floor(occ / n) + 1, chord, next
+      round: Math.floor(occ / n) + 1, chord, next,
+      chordFrom: chords[ci] ? chords[ci].at : 0,
+      chordTo: chords[ci + 1] ? chords[ci + 1].at : 1
     };
   }
 
@@ -312,6 +328,10 @@ const ChordSync = (function () {
 
   // ---------- syncing ----------
 
+  // What Space / the tap button marks while syncing: the next bar, or the start of the next part
+  let tapStep = "bar";
+  try { if (localStorage.getItem("tunes.tapStep") === "part") tapStep = "part"; } catch (e) { /* storage blocked */ }
+
   function startTapping() {
     const saved = savedSync();
     tapping = { points: saved ? saved.points : [], end: saved ? saved.end : null };
@@ -366,13 +386,25 @@ const ChordSync = (function () {
     }
   }
 
-  // Space: "a bar starts now" - the nearest bar line the tempo predicts, or the bar after the last point
+  // Space: "a bar starts now" - the nearest bar line the tempo predicts, or the bar after the last point.
+  // In "Next part" mode the same, but only part starts (A1, A2, B1...) count.
   function tapBar() {
     if (!tapping || !youtubePlayer || !youtubePlayer.getCurrentTime) return;
     const t = videoTime();
     const { last, expected } = expectation(t);
     const after = last ? last[1] + 1 : 0;
-    addPoint(t, expected === null ? after : Math.max(after, Math.round(expected)));
+    if (tapStep === "part") {
+      let best = null;
+      for (let k = 0, abs = 0; k < chart.sequence.length * 20; abs += barsIn(k), k++) {
+        if (abs < after) continue;
+        if (expected === null) { best = abs; break; }    // no tempo yet: the next part along
+        if (best === null || Math.abs(abs - expected) < Math.abs(best - expected)) best = abs;
+        else break;                                       // getting further away
+      }
+      if (best !== null) addPoint(t, best);
+    } else {
+      addPoint(t, expected === null ? after : Math.max(after, Math.round(expected)));
+    }
     flash(".cs-tap");
   }
 
@@ -391,16 +423,6 @@ const ChordSync = (function () {
       tuneRef(`chordSync/${videoID}`).set(result.points.length ? { points: result.points, end: result.end } : null, reportWriteError);
     }
     render();
-  }
-
-  function nudge(seconds) {
-    const s = savedSync();
-    if (!s) return;
-    const shift = x => Math.max(0, Math.round((x + seconds) * 100) / 100);
-    tuneRef(`chordSync/${videoID}`).set({
-      points: s.points.map(p => [shift(p[0]), p[1]]),
-      end: s.end == null ? null : shift(s.end)
-    }, reportWriteError);
   }
 
   function clearSync() {
@@ -434,10 +456,24 @@ const ChordSync = (function () {
   // evenly between blue ones. Drag to move (makes it blue), click to jump the video there,
   // double-click a blue one to remove it.
 
-  let pps = 50 * 0.67 * 0.67; // zoom: pixels per second (default is two "−" clicks out from 50)
-  let tlStart = 0;           // video time at the left edge of the timeline
+  let pps = 50 * 0.67; // zoom: pixels per second (default is one "−" click out from 50)
+  let tlStart = 0;
+  let tlAnchorKey = "";      // what tlStart was worked out for (video, Edit, zoom, width)           // video time at the left edge of the timeline
   let dragging = null;
   let settingEnd = false;    // "Set end bar": the next bar clicked becomes the last one played
+  // "Hide": collapse the panel to its heading and switch off play along / metronome; remembered in this browser
+  let collapsed = false;
+  try { collapsed = localStorage.getItem("tunes.chordsHidden") === "on"; } catch (e) { /* storage blocked */ }
+  // "Hide controls": hide everything under the chord chart (play along row, timeline, buttons);
+  // play along keeps going. Remembered in this browser.
+  let controlsHidden = false;
+  try { controlsHidden = localStorage.getItem("tunes.controlsHidden") === "on"; } catch (e) { /* storage blocked */ }
+  let editing = false;       // "Edit" shows the editing buttons (end bar, re-sync, start, change chords, clear)
+  // Show the blue (set by you) markers on the timeline; remembered in this browser
+  let showManual = true;
+  try { showManual = localStorage.getItem("tunes.showManualMarks") !== "off"; } catch (e) { /* storage blocked */ }
+  let moveAll = false;       // Edit option: dragging any marker slides the whole timing
+  let tlMode = null;         // "move" or "jump": toolbar toggles standing in for Alt / Ctrl (for phones)
 
   // Video time where bar `abs` starts, from the sync points (null if unknown)
   function timeOfBar(abs, pts) {
@@ -465,7 +501,7 @@ const ChordSync = (function () {
       const start = timeOfBar(abs, pts);
       if (start == null || start >= videoEnd) break;
       const after = sync.end != null && start >= sync.end - 1e-6;
-      if (after && ++afterEnd > 8) break;
+      if (after && ++afterEnd > 8 && !editing) break; // in Edit the whole video is shown
       const next = timeOfBar(abs + 1, pts);
       bars.push({ abs, start, end: next == null ? start + 2 : Math.min(next, Math.max(videoEnd, start + 0.5)), manual: manual.has(abs), after });
     }
@@ -479,25 +515,58 @@ const ChordSync = (function () {
   function rowOf(t) { return Math.max(0, Math.floor((t - tlStart) / rowSeconds + 1e-9)); }
   function xIn(t, row) { return (t - tlStart - row * rowSeconds) * pps; }
 
+  // Colour for a part: 0 orange, 1 green, 2 blue, 3 purple, in the order the parts first appear
+  function partColour(part) {
+    const order = [];
+    chart.sequence.forEach(o => { if (!order.includes(o.part)) order.push(o.part); });
+    return Math.max(0, order.indexOf(part)) % 4;
+  }
+
+  // Width in pixels of a chord label as drawn (measured, so wide letters like "m" count properly)
+  let measureCtx = null;
+  const labelWidths = {};
+  function labelWidth(text, size) {
+    const id = size + "|" + text;
+    if (labelWidths[id] == null) {
+      if (!measureCtx) measureCtx = document.createElement("canvas").getContext("2d");
+      measureCtx.font = `${size}px ${getComputedStyle(panel).fontFamily}`;
+      labelWidths[id] = Math.ceil(measureCtx.measureText(text).width);
+    }
+    return labelWidths[id];
+  }
+
   function timelineInnerHTML(sync) {
     const bars = timelineBars(sync);
     if (!bars.length) return "";
     const n = chart.sequence.length;
     tlWidth = Math.max(240, (panel.clientWidth || 626) - 26);
     rowSeconds = tlWidth / pps;
-    // Left edge follows the first bar, except mid-drag, so the dragged marker tracks the pointer
-    // Rows are measured from 0:00 of the video (row k covers k*rowSeconds onwards);
-    // rows before the tune starts are left out
-    const wantStart = Math.floor(bars[0].start / rowSeconds) * rowSeconds;
-    tlStart = dragging ? Math.min(tlStart, wantStart) : wantStart;
-    const tEnd = Math.max(sync.end || 0, bars[bars.length - 1].end) + 1;
+    // In Edit the whole video is shown from 0:00; otherwise bar 1 starts a third of the way along the first row.
+    // The left edge is set once per video / mode / zoom and then stays put, so moving bar 1 doesn't
+    // shift everything; it only moves back if bar 1 is dragged earlier than the left edge.
+    const wantStart = editing ? 0 : bars[0].start - rowSeconds / 3;
+    const anchorKey = videoID + "|" + editing + "|" + pps + "|" + tlWidth;
+    if (anchorKey !== tlAnchorKey) { tlStart = wantStart; tlAnchorKey = anchorKey; }
+    else if (bars[0].start < tlStart + 0.2) tlStart = Math.min(tlStart, wantStart);
+    const duration = youtubePlayer && youtubePlayer.getDuration ? youtubePlayer.getDuration() : 0;
+    const tEnd = editing && duration ? duration : Math.max(sync.end || 0, bars[bars.length - 1].end) + 1;
     tlRows = rowOf(tEnd) + 1;
     const top = (row, offset) => row * ROW_H + offset;
+    // Lines are placed and sized in whole screen pixels, so with display scaling (125%, 150%...)
+    // they all come out the same width instead of some being drawn a pixel thicker
+    const dpr = window.devicePixelRatio || 1;
+    const lineDevicePx = Math.max(1, Math.round(1.6 * dpr));
+    const lineWidth = lineDevicePx / dpr;
+    const snap = v => Math.round(v * dpr) / dpr;
+    const lineLeft = x => snap(x - lineWidth / 2);
+    const barLeft = x => lineLeft(x) + Math.floor(lineDevicePx / 2) / dpr; // bar edge sits inside the marker line
+    panel.style.setProperty("--tl-line", lineWidth + "px");
+    panel.style.setProperty("--tl-hair", 1 / dpr + "px");
 
     let html = "";
     for (let r = 0; r < tlRows; r++) {
       html += `<div class="tl-rowbg" style="top:${top(r, 18)}px"></div>`;
-      html += `<div class="tl-time" style="top:${top(r, 3)}px">${formatClock(tlStart + r * rowSeconds)}</div>`;
+      html += `<div class="tl-time" style="top:${top(r, 3)}px">${formatClock(Math.max(0, tlStart + r * rowSeconds))}</div>`;
     }
 
     bars.forEach(b => {
@@ -507,25 +576,42 @@ const ChordSync = (function () {
       const chords = (occ.bars[place.bar] || []).map((c, ci) => ({ chord: c.chord, t: b.start + c.at * (b.end - b.start), muted: isMuted(muteKey(occ.part, place.bar, ci)) }));
       const startRow = rowOf(b.start);
       if (place.bar === 0) {
-        html += `<div class="tl-part" style="left:${xIn(b.start, startRow).toFixed(1)}px;top:${top(startRow, 2)}px">${occ.label}${round > 1 ? " ·" + round : ""}</div>`;
+        html += `<div class="tl-part pc-${partColour(occ.part)}" style="left:${xIn(b.start, startRow).toFixed(1)}px;top:${top(startRow, 2)}px">${occ.label}${round > 1 ? " ·" + round : ""}</div>`;
       }
       // A bar that crosses the end of a row continues at the start of the next one
       for (let r = startRow; r <= rowOf(b.end - 1e-6); r++) {
         const segStart = Math.max(b.start, tlStart + r * rowSeconds);
         const segEnd = Math.min(b.end, tlStart + (r + 1) * rowSeconds);
         if (segEnd <= segStart) continue;
-        const labels = chords.filter(c => c.t >= segStart - 1e-6 && c.t < segEnd)
-          .map(c => `<span class="tl-chord${c.muted ? " muted" : ""}" style="left:${((c.t - segStart) * pps).toFixed(1)}px">${escapeHtml(c.chord)}</span>`).join("");
-        html += `<div class="tl-bar${place.bar === 0 && r === startRow ? " tl-part-start" : ""}${r > startRow ? " tl-cont" : ""}${b.after ? " tl-after" : ""}" data-abs="${b.abs}"
-          style="left:${xIn(segStart, r).toFixed(1)}px;width:${Math.max(1, (segEnd - segStart) * pps).toFixed(1)}px;top:${top(r, 18)}px">${labels}</div>`;
+        const width = (segEnd - segStart) * pps;
+        const shown = chords.filter(c => c.t >= segStart - 1e-6 && c.t < segEnd);
+        // When chords don't fit side by side (zoomed out), later ones drop to a second line
+        // and are pulled back inside the bar so they aren't cut off
+        const textWidth = c => labelWidth(c.chord, 12) + 8; // text plus its left padding
+        const cramped = shown.some((c, i) => {
+          const x = (c.t - segStart) * pps;
+          const room = (i + 1 < shown.length ? (shown[i + 1].t - segStart) * pps : width) - x;
+          return room < textWidth(c);
+        });
+        const labels = shown.map((c, i) => {
+          let x = (c.t - segStart) * pps;
+          let style = `left:${x.toFixed(1)}px`;
+          if (cramped) {
+            x = Math.max(0, Math.min(x, width - (labelWidth(c.chord, 11) + 5))); // 11px text, 3px padding, a little room
+            style = `left:${x.toFixed(1)}px;top:${i === 0 ? 3 : 21}px`;
+          }
+          return `<span class="tl-chord${c.muted ? " muted" : ""}${cramped ? " tl-cramped" : ""}" style="${style}">${escapeHtml(c.chord)}</span>`;
+        }).join("");
+        html += `<div class="tl-bar${place.bar === 0 && r === startRow ? " tl-part-start pc-" + partColour(occ.part) : ""}${r > startRow ? " tl-cont" : ""}${b.after ? " tl-after" : ""}" data-abs="${b.abs}"
+          style="left:${barLeft(xIn(segStart, r))}px;width:${Math.max(1 / dpr, barLeft(xIn(segEnd, r)) - barLeft(xIn(segStart, r)))}px;top:${top(r, 18)}px">${labels}</div>`;
       }
       if (!b.after) html += `<div class="tl-mark ${b.manual ? "manual" : "auto"}" data-abs="${b.abs}" data-t="${b.start}"
-        style="left:${xIn(b.start, startRow).toFixed(1)}px;top:${top(startRow, 14)}px"
-        title="${escapeHtml(describeBar(b.abs))} at ${b.start.toFixed(2)}s${b.manual ? " (set by you; Alt+drag to move, double-click to remove)" : " (automatic; Alt+drag or double-click to pin)"}"></div>`;
+        style="left:${lineLeft(xIn(b.start, startRow))}px;top:${top(startRow, 14)}px"
+        title="${escapeHtml(describeBar(b.abs))} at ${b.start.toFixed(2)}s${b.manual ? " (set by you; drag to move, double-click to remove)" : " (automatic; drag to move, double-click to pin)"}"></div>`;
     });
     if (sync.end != null) {
       const r = rowOf(sync.end);
-      html += `<div class="tl-mark end" data-end="1" data-t="${sync.end}" style="left:${xIn(sync.end, r).toFixed(1)}px;top:${top(r, 14)}px"
+      html += `<div class="tl-mark end" data-end="1" data-t="${sync.end}" style="left:${lineLeft(xIn(sync.end, r))}px;top:${top(r, 14)}px"
         title="End at ${sync.end.toFixed(2)}s (double-click to remove)"></div>`;
     }
     return `<div class="tl-inner" style="width:${tlWidth}px;height:${tlRows * ROW_H}px">${html}<div class="tl-playhead"></div></div>`;
@@ -558,15 +644,12 @@ const ChordSync = (function () {
     if (!sync || !sync.points.length) return "";
     return `
       <div class="cs-row cs-timeline-tools">
-        <span class="cs-dim">Timeline: <span class="tl-key manual"></span> set by you · <span class="tl-key auto"></span> automatic.
-          <b>Alt+drag</b> to move · <b>Ctrl+click</b> to jump the video there · double-click grey to pin, blue to remove.</span>
-        <button class="tl-set-end${settingEnd ? " active" : ""}" title="Then click the last bar to play; chords and strumming stop after it">${settingEnd ? "Click the last bar…" : "Set end bar"}</button>
-        <label class="cs-dim tl-start-wrap" title="When bar 1 starts (mm:ss:hundredths). Changing it moves the whole sync.">Start
-          <input class="tl-start" type="text" value="${formatStart(sync.points[0][0])}" spellcheck="false"></label>
-        <button class="tl-zoom" data-zoom="0.67" title="Zoom out">−</button>
-        <button class="tl-zoom" data-zoom="1.5" title="Zoom in">+</button>
-        <button class="cs-cue" title="Jump to the cue point">Cue</button>
-        <button class="cs-play" title="Play / pause">${isPlaying() ? "⏸︎" : "⏵︎"}</button><button class="cs-mute" title="Mute / unmute the video">${isVideoMuted() ? "🔇" : "🔊"}</button>
+        <span class="cs-btn-group"><button class="tl-mode${tlMode === "move" ? " active" : ""}" data-mode="move" title="Drag bars and markers to move them (for phones; same as Alt+drag)">Move</button><button
+ class="tl-mode${tlMode === "jump" ? " active" : ""}" data-mode="jump" title="Click the timeline to jump the video there (same as Ctrl+click)">Jump</button></span>
+        <span class="cs-btn-group"><button class="tl-zoom" data-zoom="0.67" title="Zoom out">−</button><button
+ class="tl-zoom" data-zoom="1.5" title="Zoom in">+</button></span>
+        ${playButtonHTML()}<button class="cs-cue" title="Jump to the cue point">Cue</button>${muteButtonHTML()}
+        ${volumeHTML()}
       </div>
       <div class="cs-timeline${settingEnd ? " tl-picking-end" : ""}">${timelineInnerHTML(sync)}</div>`;
   }
@@ -602,6 +685,11 @@ const ChordSync = (function () {
 
   // Sync with one bar start (or the end) moved to time t
   function withMoved(sync, drag, t) {
+    if (drag.all) {
+      const delta = t - drag.t;
+      const shift = x => Math.round((x + delta) * 100) / 100;
+      return { points: sync.points.map(p => [shift(p[0]), p[1]]), end: sync.end == null ? null : shift(sync.end) };
+    }
     if (drag.isEnd) return { points: sync.points, end: t };
     const points = sync.points.filter(p => p[1] !== drag.abs);
     points.push([t, drag.abs]);
@@ -641,7 +729,7 @@ const ChordSync = (function () {
     if (!box) return;
 
     box.addEventListener("pointerdown", e => {
-      const mark = e.target.closest(".tl-mark");
+      let mark = e.target.closest(".tl-mark");
       const clickedBar = e.target.closest(".tl-bar");
       if (settingEnd && clickedBar) {
         // The tune ends where this bar finishes
@@ -651,20 +739,23 @@ const ChordSync = (function () {
         settingEnd = false;
         if (endTime != null) commitSync(sync.points, Math.round(endTime * 100) / 100);
         else redrawTimeline(activeSync());
-        const btn = panel.querySelector(".tl-set-end");
-        if (btn) { btn.classList.remove("active"); btn.textContent = "Set end bar"; }
-        box.classList.remove("tl-picking-end");
+        showTimelineModes();
         return;
       }
-      if (e.ctrlKey || e.metaKey) {
+      if (e.ctrlKey || e.metaKey || tlMode === "jump") {
         const t = mark ? Number(mark.dataset.t) : timeAtPointer(e, box);
         if (t != null && youtubePlayer && youtubePlayer.seekTo) youtubePlayer.seekTo(Math.max(0, t), true);
         e.preventDefault();
         return;
       }
-      if (!mark && clickedBar && clickedBar.dataset.abs && !clickedBar.classList.contains("tl-after") &&
-          isDoubleClick("bar" + clickedBar.dataset.abs)) {
-        pinBar(Number(clickedBar.dataset.abs));
+      // Press and drag a bar line (marker) to move where that bar starts: straight away with a mouse,
+      // with Move on for touch (so a swipe still scrolls the page). Alt+drag always works.
+      // Double-click without dragging: a bar or grey marker gets pinned, a blue marker (or the end) removed.
+      const canDrag = e.pointerType === "mouse" || e.altKey || tlMode === "move";
+      let dbl = null; // "bar" or "mark": where a double-click was
+      // Only the bar line itself drags; a double-click inside a bar pins its start
+      if (!mark && clickedBar && clickedBar.dataset.abs && !clickedBar.classList.contains("tl-after")) {
+        if (isDoubleClick("bar" + clickedBar.dataset.abs)) pinBar(Number(clickedBar.dataset.abs));
         return;
       }
       if (!mark) return;
@@ -672,14 +763,15 @@ const ChordSync = (function () {
       if (!sync) return;
       const isEnd = !!mark.dataset.end;
       const abs = isEnd ? null : Number(mark.dataset.abs);
-      // Without Alt a marker doesn't move; double-click pins a grey one or removes a blue one (or the end)
-      if (!e.altKey) {
-        if (isDoubleClick(isEnd ? "end" : "mark" + abs)) {
-          if (isEnd) commitSync(sync.points, null);
+      if (!dbl && isDoubleClick(isEnd ? "end" : "mark" + abs)) dbl = "mark";
+      if (!canDrag) {
+        // Touch without Move: no dragging, but a double tap still pins / removes
+        if (dbl) {
+          if (dbl === "bar") pinBar(abs);
+          else if (isEnd) commitSync(sync.points, null);
           else if (sync.points.some(p => p[1] === abs)) commitSync(sync.points.filter(p => p[1] !== abs), sync.end);
           else pinBar(abs);
         }
-        e.preventDefault();
         return;
       }
       const t = Number(mark.dataset.t);
@@ -688,13 +780,20 @@ const ChordSync = (function () {
       const before = isEnd ? others.filter(p => p[0] < sync.end).pop() : others.filter(p => p[1] < abs).pop();
       const after = isEnd ? null : others.find(p => p[1] > abs);
       const grabbedAt = timeAtPointer(e, box);
-      dragging = {
+      dragging = moveAll ? {
+        abs, isEnd, sync, t, moved: false, current: t, all: true,
+        startX: e.clientX, startY: e.clientY,
+        grab: grabbedAt == null ? 0 : t - grabbedAt,
+        min: t - sync.points[0][0],   // bar 1 can't go before the start of the video
+        max: Infinity
+      } : {
         abs, isEnd, sync, t, moved: false, current: t,
         startX: e.clientX, startY: e.clientY,
         grab: grabbedAt == null ? 0 : t - grabbedAt,   // where on the marker it was grabbed
         min: before ? before[0] + 0.05 : 0,
         max: after ? after[0] - 0.05 : (isEnd || sync.end == null ? Infinity : sync.end - 0.05)
       };
+      dragging.dbl = dbl;
       // Capture on the box, which survives the redraws during the drag
       box.setPointerCapture(e.pointerId);
       e.preventDefault();
@@ -702,7 +801,7 @@ const ChordSync = (function () {
 
     box.addEventListener("pointermove", e => {
       if (!dragging) return;
-      if (!dragging.moved && Math.abs(e.clientX - dragging.startX) < 4 && Math.abs(e.clientY - dragging.startY) < 4) return;
+      if (!dragging.moved && e.clientX === dragging.startX && e.clientY === dragging.startY) return; // moves from the first pixel
       dragging.moved = true;
       const t = timeAtPointer(e, box);
       if (t == null) return;
@@ -724,17 +823,32 @@ const ChordSync = (function () {
         commitSync(result.points, result.end);
         return;
       }
+      if (d.dbl) {
+        // A double-click that didn't drag
+        const sync = editableSync();
+        if (!sync) return;
+        if (d.dbl === "bar") pinBar(d.abs);
+        else if (d.isEnd) commitSync(sync.points, null);
+        else if (sync.points.some(p => p[1] === d.abs)) commitSync(sync.points.filter(p => p[1] !== d.abs), sync.end);
+        else pinBar(d.abs);
+      }
     };
     box.addEventListener("pointerup", endDrag);
     box.addEventListener("pointercancel", endDrag);
 
+    // Move / Jump / Set end bar: only one at a time; clicking the active one turns it off
     const setEnd = panel.querySelector(".tl-set-end");
     if (setEnd) setEnd.addEventListener("click", () => {
       settingEnd = !settingEnd;
-      setEnd.classList.toggle("active", settingEnd);
-      setEnd.textContent = settingEnd ? "Click the last bar…" : "Set end bar";
-      box.classList.toggle("tl-picking-end", settingEnd);
+      if (settingEnd) tlMode = null;
+      showTimelineModes();
     });
+    panel.querySelectorAll(".tl-mode").forEach(b => b.addEventListener("click", () => {
+      tlMode = tlMode === b.dataset.mode ? null : b.dataset.mode;
+      if (tlMode) settingEnd = false;
+      showTimelineModes();
+    }));
+    showTimelineModes();
 
     // Start field: shift every bar and the end by the same amount
     const startField = panel.querySelector(".tl-start");
@@ -764,7 +878,28 @@ const ChordSync = (function () {
     }));
   }
 
-  // Markers show a drag cursor only while Alt is held
+  // Show which timeline mode is on, in the buttons and the cursors
+  function showTimelineModes() {
+    panel.querySelectorAll(".tl-mode").forEach(b => b.classList.toggle("active", b.dataset.mode === tlMode));
+    const setEnd = panel.querySelector(".tl-set-end");
+    if (setEnd) {
+      setEnd.classList.toggle("active", settingEnd);
+      setEnd.textContent = settingEnd ? "Click the last bar…" : "Set end bar";
+    }
+    const box = panel.querySelector(".cs-timeline");
+    if (box) box.classList.toggle("tl-picking-end", settingEnd);
+    panel.classList.toggle("tl-move", tlMode === "move");
+    panel.classList.toggle("cs-editing", editing);
+    panel.classList.toggle("cs-controls-hidden", controlsHidden && !tapping && !!panel.querySelector(".cs-controls-toggle"));
+    panel.classList.toggle("cs-collapsed", collapsed && !!panel.querySelector(".cs-collapse"));
+    panel.classList.toggle("tl-hide-manual", !showManual);
+    panel.classList.toggle("cs-steady-on", steadyTempo && !tapping && !editing); // Steady tempo hides the timeline (not in Edit), keeping its space
+    const edit = panel.querySelector(".cs-edit");
+    if (edit) edit.classList.toggle("active", editing);
+    panel.classList.toggle("tl-jumping", tlMode === "jump");
+  }
+
+  // Markers show a drag cursor while Alt is held (or Move is on)
   const setAlt = on => panel.classList.toggle("tl-alt", on);
   document.addEventListener("keydown", e => { if (e.key === "Alt") setAlt(true); });
   document.addEventListener("keyup", e => { if (e.key === "Alt") setAlt(false); });
@@ -795,15 +930,53 @@ const ChordSync = (function () {
     // One row per part (first time through), each bar showing its chords
     const seen = new Set();
     return chart.sequence.filter(o => !seen.has(o.part) && seen.add(o.part)).map(o => `
-      <div class="cs-part" data-part="${o.part}">
+      <div class="cs-part pc-${partColour(o.part)}" data-part="${o.part}">
         <div class="cs-part-label">${o.part}</div>
         <div class="cs-bars">${o.bars.map((b, i) =>
           `<div class="cs-bar" data-bar="${i}">${b.map((c, ci) => {
             const key = muteKey(o.part, i, ci), muted = isMuted(key);
             return `<span class="cs-chord-name${muted ? " muted" : ""}" data-mute="${key}"
-              title="${muted ? "Silenced in Strum along: click to bring back" : "Click to silence this chord in Strum along"}">${escapeHtml(c.chord)}</span>`;
+              title="${editing ? (muted ? "Silenced in Play along: click to bring back" : "Click to silence this chord in Play along") : (muted ? "Silenced in Play along (Edit to change). Click to play from here" : "Click to play from here")}">${escapeHtml(c.chord)}</span>`;
           }).join(" ")}</div>`).join("")}</div>
       </div>`).join("");
+  }
+
+  // Jump the video to a chord in the chart (first time through the tune) and play
+  function playFromChord(key) {
+    const [part, barText, ciText] = key.split(":");
+    const bar = Number(barText), ci = Number(ciText);
+    const sync = playbackSync();
+    if (!sync || !sync.points.length || !youtubePlayer || !youtubePlayer.seekTo) return;
+    const k = chart.sequence.findIndex(o => o.part === part);
+    if (k < 0) return;
+    const chords = chart.sequence[k].bars[bar] || [];
+    const at = chords[ci] ? chords[ci].at : 0;
+    const t = timeOfBar(firstBarOf(k) + bar + at, sync.points);
+    if (t == null) return;
+    youtubePlayer.seekTo(Math.max(0, t - 0.05), true);
+    if (!isPlaying() && youtubePlayer.playVideo) youtubePlayer.playVideo();
+    lastStrummed = null; // play along picks up from here
+  }
+
+  // Everything behind the Edit button, on one line (plus the timeline help underneath)
+  function editRowHTML(timelineShown) {
+    const saved = !tapping && videoID && youtubePlayer ? savedSync() : null;
+    const sync = activeSync();
+    return `
+      <div class="cs-row cs-edit-only cs-edit-row">
+        ${saved ? `<span class="cs-dim">Synced to this video (${saved.points.length} points)</span>` : ""}
+        <button class="cs-change" title="Use chords from another version or source; your timings are kept">Change chords</button>
+        ${saved ? `<button class="cs-start">Re-sync</button>` : ""}
+        ${timelineShown ? `<button class="tl-set-end${settingEnd ? " active" : ""}" title="Then click the last bar to play; chords and strumming stop after it">${settingEnd ? "Click the last bar…" : "Set end bar"}</button>
+        <label class="cs-dim tl-start-wrap" title="When bar 1 starts (mm:ss:hundredths). Changing it moves the whole sync.">Start
+          <input class="tl-start" type="text" value="${formatStart(sync.points[0][0])}" spellcheck="false"></label>` : ""}
+        ${timelineShown ? `<label class="cs-check" title="Show or hide the blue markers (the ones you set)"><input type="checkbox" class="tl-show-manual" ${showManual ? "checked" : ""}> Blue lines</label>` : ""}
+        ${timelineShown ? `<label class="cs-check" title="Dragging any marker slides all of them together"><input type="checkbox" class="tl-move-all" ${moveAll ? "checked" : ""}> Move all together</label>` : ""}
+        ${saved ? `<button class="cs-clear" title="Remove the timing for this video">Clear</button>` : ""}
+      </div>
+      ${timelineShown ? `<div class="cs-edit-only cs-dim cs-edit-help">Timeline: <span class="tl-key manual"></span> set by you · <span class="tl-key auto"></span> automatic.
+        <b>Drag</b> a bar line to move it (Alt+drag, or Move on a phone) · <b>Ctrl+click</b> (or Jump) to jump the video there · double-click grey to pin, blue to remove.
+        In Edit, clicking a chord silences it in Play along.</div>` : ""}`;
   }
 
   function steadyTitle(sync) {
@@ -819,10 +992,13 @@ const ChordSync = (function () {
     if (tapping) {
       return `
         <div class="cs-hint">As the video plays, <b>click a bar in the chart the moment it starts</b>. Click as many as you like;
-          the bars in between are spread evenly. <b>Space</b> marks the next bar instead. Press <b>End</b> when the tune finishes.
+          the bars in between are spread evenly. <b>Space</b> marks the next bar (or the next part's first bar) instead. Press <b>End</b> when the tune finishes.
           Clicking again part-way through replaces everything after that point.</div>
         <div class="cs-row">
-          <button class="cs-tap">Bar starts (Space)</button>
+          <span class="segmented cs-tap-step" title="What Space and the tap button mark">
+            <button data-step="bar"${tapStep === "bar" ? ' class="active"' : ""}>Next bar</button><button data-step="part"${tapStep === "part" ? ' class="active"' : ""}>Next part</button>
+          </span>
+          <button class="cs-tap">${tapStep === "part" ? "Part starts" : "Bar starts"} (Space)</button>
           <button class="cs-end">End</button>
           <button class="cs-done">Done</button>
           <button class="cs-cancel">Cancel</button>
@@ -836,15 +1012,12 @@ const ChordSync = (function () {
     }
     return `
       <div class="cs-row">
-        <span class="cs-dim">Synced to this video (${s.points.length} points)</span>
-        <button class="cs-start">Re-sync</button>
-        <button class="cs-nudge" data-shift="-0.1" title="Chords change too late? Move them earlier">−0.1s</button>
-        <button class="cs-nudge" data-shift="0.1" title="Chords change too early? Move them later">+0.1s</button>
-        <label class="cs-check"><input type="checkbox" class="cs-strum" ${strumAlong ? "checked" : ""}> Strum along</label>
+        <label class="cs-check"><input type="checkbox" class="cs-strum" ${strumAlong ? "checked" : ""}> Play along</label>
         <label class="cs-check" title="${steadyTitle(s)}"><input type="checkbox" class="cs-steady" ${steadyTempo ? "checked" : ""}> Steady tempo</label>
-        <span class="cs-backing" title="Instrument for Strum along">${BACKINGS.map(([id, label]) =>
+        <span class="cs-backing" title="Instrument for Play along">${BACKINGS.map(([id, label]) =>
           `<button class="cs-backing-btn${backing === id ? " active" : ""}" data-backing="${id}">${label}</button>`).join("")}</span>
-        <button class="cs-clear" title="Remove the timing for this video">Clear</button>
+        <label class="cs-check" title="Play along in rhythm (bass on the beat, chord on the off-beat). Off: one chord per change"><input type="checkbox" class="cs-rhythm" ${rhythmOn ? "checked" : ""}> Rhythm</label>
+        <label class="cs-check" title="Click on every beat, following the timing"><input type="checkbox" class="cs-metronome" ${metronome ? "checked" : ""}> Metronome</label>
       </div>`;
   }
 
@@ -852,8 +1025,8 @@ const ChordSync = (function () {
   // Cue sits beside the zoom buttons when the timeline is showing, otherwise here
   function transportHTML(withCue = true) {
     return `<div class="cs-row cs-transport">
-      <button class="cs-play" title="Play / pause">${isPlaying() ? "⏸︎" : "⏵︎"}</button><button class="cs-mute" title="Mute / unmute the video">${isVideoMuted() ? "🔇" : "🔊"}</button>
-      ${withCue ? `<button class="cs-cue" title="Jump to the cue point">Cue</button>` : ""}
+      ${playButtonHTML()}${withCue ? `<button class="cs-cue" title="Jump to the cue point">Cue</button>` : ""}${muteButtonHTML()}
+      ${volumeHTML()}
     </div>`;
   }
   function wireTransport() {
@@ -863,12 +1036,65 @@ const ChordSync = (function () {
     if (mute) mute.addEventListener("click", () => {
       if (!youtubePlayer || !youtubePlayer.mute) return;
       if (isVideoMuted()) youtubePlayer.unMute(); else youtubePlayer.mute();
-      mute.textContent = isVideoMuted() ? "🔊" : "🔇"; // the player updates a moment later
+      setIcon(mute, isVideoMuted() ? "sound" : "muted"); // the player updates a moment later
       mute._clickedAt = Date.now();
     });
     panel.querySelectorAll(".cs-cue").forEach(cue =>
       cue.addEventListener("click", () => document.getElementById("cueBtn").click()));
   }
+  // Line icons in the same style as the tune list's play buttons
+  const ICONS = {
+    play: '<path d="M5.2 3.6v8.8L12.4 8z" fill="currentColor"/>',
+    pause: '<rect x="4.2" y="3.6" width="2.4" height="8.8" rx="0.6" fill="currentColor"/><rect x="9.4" y="3.6" width="2.4" height="8.8" rx="0.6" fill="currentColor"/>',
+    sound: '<path d="M2.5 6.2h2.3L8 3.5v9L4.8 9.8H2.5z" fill="currentColor"/><path d="M10.4 5.8a3 3 0 0 1 0 4.4M12.2 4a5.6 5.6 0 0 1 0 8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>',
+    muted: '<path d="M2.5 6.2h2.3L8 3.5v9L4.8 9.8H2.5z" fill="currentColor"/><path d="M10.5 6.2l3.6 3.6M14.1 6.2l-3.6 3.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>'
+  };
+  function icon(name) {
+    return `<svg viewBox="0 0 16 16" aria-hidden="true">${ICONS[name]}</svg>`;
+  }
+  // Swap a button's icon only when it changes
+  function setIcon(btn, name) {
+    if (btn.dataset.icon === name) return;
+    btn.dataset.icon = name;
+    btn.innerHTML = icon(name);
+  }
+  function playButtonHTML() {
+    const name = isPlaying() ? "pause" : "play";
+    return `<button class="cs-play cs-icon" title="Play / pause" data-icon="${name}">${icon(name)}</button>`;
+  }
+  function muteButtonHTML() {
+    const name = isVideoMuted() ? "muted" : "sound";
+    return `<button class="cs-mute cs-icon" title="Mute / unmute the video" data-icon="${name}">${icon(name)}</button>`;
+  }
+
+  function volumeHTML() {
+    return `<span class="cs-volumes">
+      <label class="cs-dim cs-volume" title="YouTube video volume">Video
+        <input type="range" class="cs-video-volume" min="0" max="100" step="1" value="${videoVolume}"></label>
+      <label class="cs-dim cs-volume" title="Play along volume">Backing
+        <input type="range" class="cs-backing-volume" min="0" max="100" step="1" value="${backingVolume}"></label>
+    </span>`;
+  }
+  function applyVideoVolume() {
+    if (!youtubePlayer || typeof youtubePlayer.setVolume !== "function") return;
+    youtubePlayer.setVolume(videoVolume);
+    volumeSetOn = youtubePlayer;
+  }
+  function wireVolumes() {
+    const video = panel.querySelector(".cs-video-volume");
+    if (video) video.addEventListener("input", () => {
+      videoVolume = Number(video.value);
+      try { localStorage.setItem("tunes.videoVolume", videoVolume); } catch (e) { /* storage blocked */ }
+      applyVideoVolume();
+    });
+    const back = panel.querySelector(".cs-backing-volume");
+    if (back) back.addEventListener("input", () => {
+      backingVolume = Number(back.value);
+      try { localStorage.setItem("tunes.backingVolume", backingVolume); } catch (e) { /* storage blocked */ }
+      ChordSound.setVolume(backingVolume / 100);
+    });
+  }
+
   function isVideoMuted() {
     try { return !!(youtubePlayer && youtubePlayer.isMuted && youtubePlayer.isMuted()); }
     catch (e) { return false; }
@@ -878,6 +1104,20 @@ const ChordSync = (function () {
     try { return !!(youtubePlayer && youtubePlayer.getPlayerState && youtubePlayer.getPlayerState() === 1); }
     catch (e) { return false; }
   }
+
+  // Blank space under the panel after hiding it (see the Hide button)
+  let spacer = 0;
+  function setSpacer(px) {
+    spacer = Math.max(0, Math.round(px));
+    panel.style.marginBottom = spacer ? spacer + "px" : "";
+  }
+  window.addEventListener("scroll", () => {
+    if (!spacer) return;
+    // Keep only as much as is needed so the current scroll position still fits
+    const contentBottom = document.documentElement.scrollHeight - spacer;
+    const needed = window.scrollY + window.innerHeight - contentBottom;
+    if (needed < spacer) setSpacer(needed);
+  }, { passive: true });
 
   function render() {
     lastShown = "";
@@ -892,8 +1132,10 @@ const ChordSync = (function () {
     if (!chart) {
       panel.innerHTML = `<div class="cs-row"><span class="cs-dim">No chord chart yet.</span>
         <button class="cs-find">Find chords on thesession.org</button></div><div class="cs-finder"></div>${transportHTML()}`;
+      panel.classList.remove("cs-collapsed", "cs-controls-hidden"); // nothing to hide yet
       panel.querySelector(".cs-find").addEventListener("click", findOnTheSession);
       wireTransport();
+      wireVolumes();
       return;
     }
 
@@ -906,8 +1148,13 @@ const ChordSync = (function () {
             ? "Chords from pasted ABC"
             : `Chords from <a href="${API}/tunes/${c.tuneId}#setting${c.settingId}" target="_blank" rel="noopener">thesession.org</a>`}
           <span class="cs-dim">· ${escapeHtml(c.name || "")}${c.member ? " · by " + escapeHtml(c.member) : ""}</span></span>
-        <button class="cs-change" title="Use chords from another version or source; your timings are kept">Change chords</button>
+        <span class="cs-head-tools">
+          <button class="cs-edit${editing ? " active" : ""}" title="Show the editing buttons">Edit</button>
+          <button class="cs-controls-toggle" title="Hide or show everything under the chord chart">${controlsHidden ? "Show controls" : "Hide controls"}</button>
+          <button class="cs-collapse" title="${collapsed ? "Show the chords section" : "Hide the chords section (and stop play along / metronome)"}">${collapsed ? "Show" : "Hide"}</button>
+        </span>
       </div>
+      ${editRowHTML(timelineShown)}
       <div class="cs-finder"></div>
       <div class="cs-now hidden"></div>
       <div class="cs-chart${tapping ? " cs-tapping" : ""}">${chartHTML()}</div>
@@ -916,25 +1163,71 @@ const ChordSync = (function () {
       ${timelineShown ? "" : transportHTML()}`;
 
     panel.querySelector(".cs-change").addEventListener("click", findOnTheSession);
+    panel.querySelector(".cs-controls-toggle").addEventListener("click", () => {
+      controlsHidden = !controlsHidden;
+      try { localStorage.setItem("tunes.controlsHidden", controlsHidden ? "on" : "off"); } catch (e) { /* storage blocked */ }
+      const before = panel.offsetHeight;
+      render();
+      setSpacer(controlsHidden ? before - panel.offsetHeight : 0); // no jump, as with Hide
+    });
+    panel.querySelector(".cs-collapse").addEventListener("click", () => {
+      collapsed = !collapsed;
+      try { localStorage.setItem("tunes.chordsHidden", collapsed ? "on" : "off"); } catch (e) { /* storage blocked */ }
+      if (collapsed) ChordSound.stop();
+      const before = panel.offsetHeight;
+      render();
+      // Hiding makes the page shorter, which would make the browser scroll up. Fill the lost height
+      // with blank space below, so nothing moves; it shrinks away as you scroll back up.
+      setSpacer(collapsed ? before - panel.offsetHeight : 0);
+    });
+    panel.querySelector(".cs-edit").addEventListener("click", () => {
+      editing = !editing;
+      if (!editing) settingEnd = false;
+      render();
+    });
     const on = (sel, fn) => panel.querySelectorAll(sel).forEach(el => el.addEventListener("click", fn));
     on(".cs-start", startTapping);
     on(".cs-tap", tapBar);
+    panel.querySelectorAll(".cs-tap-step button").forEach(b => b.addEventListener("click", () => {
+      tapStep = b.dataset.step;
+      try { localStorage.setItem("tunes.tapStep", tapStep); } catch (e) { /* storage blocked */ }
+      panel.querySelectorAll(".cs-tap-step button").forEach(x => x.classList.toggle("active", x === b));
+      const tap = panel.querySelector(".cs-tap");
+      if (tap) tap.textContent = (tapStep === "part" ? "Part starts" : "Bar starts") + " (Space)";
+      b.blur(); // so Space keeps tapping instead of pressing this button
+    }));
     if (tapping) {
       panel.querySelectorAll(".cs-bar").forEach(cell => cell.addEventListener("click", () =>
         clickBar(cell.closest(".cs-part").dataset.part, Number(cell.dataset.bar), cell)));
     } else {
-      panel.querySelectorAll(".cs-chord-name").forEach(el => el.addEventListener("click", () => toggleMute(el.dataset.mute)));
+      // A whole bar is a button: play from its start. A chord name plays from that chord
+      // (so a half-bar chord starts halfway), or in Edit silences / restores it.
+      panel.querySelectorAll(".cs-bar").forEach(cell => cell.addEventListener("click", e => {
+        const name = e.target.closest(".cs-chord-name");
+        if (name && editing) return toggleMute(name.dataset.mute);
+        if (name) return playFromChord(name.dataset.mute);
+        playFromChord(`${cell.closest(".cs-part").dataset.part}:${cell.dataset.bar}:0`);
+      }));
     }
     on(".cs-end", tapEnd);
     on(".cs-done", () => finishTapping(true));
     on(".cs-cancel", () => finishTapping(false));
     on(".cs-clear", clearSync);
-    panel.querySelectorAll(".cs-nudge").forEach(b => b.addEventListener("click", () => nudge(Number(b.dataset.shift))));
     const strum = panel.querySelector(".cs-strum");
     const steady = panel.querySelector(".cs-steady");
     if (steady) steady.addEventListener("change", () => {
       steadyTempo = steady.checked;
+      if (youtubePlayer && youtubePlayer.mute) {
+        if (steadyTempo && !isVideoMuted()) { youtubePlayer.mute(); mutedBySteady = true; }
+        else if (!steadyTempo && mutedBySteady) { youtubePlayer.unMute(); mutedBySteady = false; }
+      }
       lastShown = ""; // re-place the highlight straight away
+      showTimelineModes(); // hides the timeline but keeps its space
+    });
+    const metro = panel.querySelector(".cs-metronome");
+    if (metro) metro.addEventListener("change", () => {
+      metronome = metro.checked;
+      lastClickBeat = null;
     });
     if (strum) strum.addEventListener("change", () => {
       strumAlong = strum.checked;
@@ -947,9 +1240,21 @@ const ChordSync = (function () {
       ChordSound.prepare(chart.chords, backing);
       ChordSound.play(chart.chords[0], backing); // a quick taste of the new sound
     }));
+    panel.querySelectorAll(".tl-move-all").forEach(box => box.addEventListener("change", () => { moveAll = box.checked; }));
+    panel.querySelectorAll(".tl-show-manual").forEach(box => box.addEventListener("change", () => {
+      showManual = box.checked;
+      try { localStorage.setItem("tunes.showManualMarks", showManual ? "on" : "off"); } catch (e) { /* storage blocked */ }
+      showTimelineModes();
+    }));
+    panel.querySelectorAll(".cs-rhythm").forEach(box => box.addEventListener("change", () => {
+      rhythmOn = box.checked;
+      try { localStorage.setItem("tunes.rhythm", rhythmOn ? "on" : "off"); } catch (e) { /* storage blocked */ }
+    }));
     if (tapping) updateTapInfo();
     wireTimeline();
     wireTransport();
+    wireVolumes();
+    showTimelineModes();
   }
 
   // Not inside the finder, so the user's typing isn't lost
@@ -962,24 +1267,63 @@ const ChordSync = (function () {
 
   // ---------- live follow ----------
 
+  // Timing of the current bar, so the concertina can play in rhythm
+  function rhythmAt(t, pos, sync, player) {
+    const start = timeOfBar(pos.abs, sync.points), end = timeOfBar(pos.abs + 1, sync.points);
+    if (start == null || end == null || end <= start) return null;
+    const rate = (player.getPlaybackRate && player.getPlaybackRate()) || 1;
+    return {
+      barSeconds: (end - start) / rate,
+      frac: (t - start) / (end - start),
+      from: pos.chordFrom, to: pos.chordTo,
+      type: (tune().chordChart && tune().chordChart.type) || tune().type || "",
+      held: !rhythmOn
+    };
+  }
+  let wasPlaying = false;
+
+  // ---------- metronome ----------
+  // Beats per bar by tune type (what you'd tap your foot to)
+  const BEATS = { jig: 2, "slip jig": 3, slide: 4, polka: 2, waltz: 3, mazurka: 3, "three-two": 3 };
+  let lastClickBeat = null; // last beat (counted from bar 0) already scheduled
+  const LOOK_AHEAD = 0.15;  // seconds; ticks are scheduled this far ahead so they land on time
+
+  function scheduleClicks(t, sync, player) {
+    const at = sync && sync.points.length ? barAt(t, sync) : null;
+    if (!at || at.waiting) { lastClickBeat = null; return; }
+    const type = ((tune().chordChart && tune().chordChart.type) || tune().type || "").toLowerCase();
+    const beats = BEATS[type] || 2;
+    const rate = (player.getPlaybackRate && player.getPlaybackRate()) || 1;
+    const next = Math.ceil(at.abs * beats - 1e-6);
+    // After a seek (or the first time), start from the next beat
+    if (lastClickBeat == null || next > lastClickBeat + 2 || next <= lastClickBeat - 1) lastClickBeat = next - 1;
+    for (let k = lastClickBeat + 1; k < next + 8; k++) {
+      const time = timeOfBar(k / beats, sync.points);
+      if (time == null || (sync.end != null && time >= sync.end)) break;
+      const delay = (time - t) / rate;
+      if (delay > LOOK_AHEAD) break;
+      if (delay > -0.03) ChordSound.click(delay, k % beats === 0);
+      lastClickBeat = k;
+    }
+  }
+
   function tick() {
+    if (youtubePlayer && youtubePlayer !== volumeSetOn) applyVideoVolume();
     const playBtn = panel.querySelector(".cs-play");
-    if (playBtn) {
-      const icon = isPlaying() ? "⏸︎" : "⏵︎";
-      if (playBtn.textContent !== icon) playBtn.textContent = icon;
-    }
+    if (playBtn) setIcon(playBtn, isPlaying() ? "pause" : "play");
     const muteBtn = panel.querySelector(".cs-mute");
-    if (muteBtn && Date.now() - (muteBtn._clickedAt || 0) > 500) {
-      const icon = isVideoMuted() ? "🔇" : "🔊";
-      if (muteBtn.textContent !== icon) muteBtn.textContent = icon;
-    }
+    if (muteBtn && Date.now() - (muteBtn._clickedAt || 0) > 500) setIcon(muteBtn, isVideoMuted() ? "muted" : "sound");
     if (!chart || panel.classList.contains("hidden")) return;
     const sync = playbackSync();
     const player = youtubePlayer;
     const t = player && player.getCurrentTime ? player.getCurrentTime() : null;
     const pos = t == null ? null : positionAt(t, sync);
     const playing = !!(player && player.getPlayerState && player.getPlayerState() === 1);
+    if (wasPlaying && !playing) ChordSound.stop(); // don't keep playing along over a paused video
+    wasPlaying = playing;
     updatePlayhead(t);
+    if (metronome && playing && !tapping && !collapsed && t != null) scheduleClicks(t, sync, player);
+    else lastClickBeat = null;
 
     const key = pos ? (pos.waiting ? "w" + pos.occurrence : `${pos.occurrence}:${pos.bar}:${pos.chord}`) : "";
     if (key === lastShown) return;
@@ -1000,18 +1344,14 @@ const ChordSync = (function () {
 
     const cell = panel.querySelector(`.cs-part[data-part="${pos.part}"] .cs-bar[data-bar="${pos.bar}"]`);
     if (cell) cell.classList.add("current");
-    const block = panel.querySelector(`.tl-bar[data-abs="${pos.abs}"]`);
-    if (block) block.classList.add("current");
     document.querySelectorAll(`.chord-diagram`).forEach(img => {
       if (img.dataset.chord === pos.chord) img.classList.add("current");
     });
-    if (now) {
-      now.classList.remove("hidden");
-      now.innerHTML = `<span class="cs-chord">${escapeHtml(pos.chord || "")}</span>
-        <span class="cs-dim">next ${escapeHtml(pos.next || "–")} · ${pos.label} bar ${pos.bar + 1}/${pos.bars}${pos.round > 1 ? " · time " + pos.round : ""}</span>`;
-    }
+    if (now) now.classList.add("hidden"); // the current chord / next / bar readout isn't shown
 
-    if (strumAlong && playing && !tapping && pos.chord && pos.beat !== lastStrummed && !pos.muted) ChordSound.play(pos.chord, backing);
+    if (strumAlong && playing && !tapping && !collapsed && pos.chord && pos.beat !== lastStrummed && !pos.muted) {
+      ChordSound.play(pos.chord, backing, rhythmAt(t, pos, sync, player));
+    }
     lastStrummed = pos.beat;
   }
   setInterval(function () {
@@ -1029,8 +1369,23 @@ const ChordSync = (function () {
 
   return {
     chartChords,
+    isTapping: () => !!tapping,
+    // Switch Play along on with this instrument (for this visit; the saved choice is kept), showing the section if hidden
+    startBacking(instrument) {
+      strumAlong = true;
+      if (collapsed) {
+        // Show the chords section again, so the backing can be heard
+        collapsed = false;
+        try { localStorage.setItem("tunes.chordsHidden", "off"); } catch (e) { /* storage blocked */ }
+        setSpacer(0);
+      }
+      if (BACKINGS.some(b => b[0] === instrument)) backing = instrument;
+      if (chart) ChordSound.prepare(chart.chords, backing);
+      render();
+    },
     // A tune was selected (or deselected with null)
     showTune(key) {
+      setSpacer(0);
       tuneKey = key;
       videoID = null;
       tapping = null;
