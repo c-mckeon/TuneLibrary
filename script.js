@@ -225,6 +225,7 @@ function subscribeToMode() {
     tunesCache = snapshot.val();
     tunesLoaded = true;
     if (!isSetsMode || isSelectingSet) loadTunes();
+    if (pendingShare) openSharedLink();
     if (typeof ChordSync !== "undefined") ChordSync.refresh();
   }, onDatabaseError);
 
@@ -315,7 +316,63 @@ database.ref(".info/connected").on("value", function (snapshot) {
 });
 
 
+// ---------- Shareable links ----------
+// The address shows what's open, so it can be copied and sent:
+//   #guitar/<tune key>/2  = that tune's 2nd play button (opens it and starts the video)
+//   #guitar/<tune key>    = the tune selected
+function setShareHash(key, linkIndex) {
+  const hash = key ? `#${currentMode}/${encodeURIComponent(key)}${linkIndex != null ? "/" + (linkIndex + 1) : ""}` : "";
+  history.replaceState(null, "", location.pathname + location.search + hash);
+}
+
+function parseShareHash() {
+  const m = location.hash.match(/^#(guitar|mandolin)\/([^/]+)(?:\/(\d+))?$/);
+  return m ? { mode: m[1], key: decodeURIComponent(m[2]), link: m[3] ? Number(m[3]) - 1 : null } : null;
+}
+
+// Opened from a shared link: use its instrument from the start
+let pendingShare = parseShareHash();
+if (pendingShare && pendingShare.mode !== currentMode) {
+  currentMode = pendingShare.mode;
+  updateModeClass();
+  guitarBtn.classList.toggle("active", currentMode === "guitar");
+  mandolinBtn.classList.toggle("active", currentMode === "mandolin");
+}
+
+// Once the tunes have loaded: open the shared tune, start its video and scroll to the player
+function openSharedLink() {
+  const share = pendingShare;
+  pendingShare = null;
+  if (!share || isSetsMode || !tunesCache || !tunesCache[share.key]) return;
+  const findRow = () => tuneListDiv.querySelector(`.tune-item[data-key="${CSS.escape(share.key)}"]`);
+  let row = findRow();
+  if (!row && repertoireOnly) {
+    // Not a repertoire tune: show the in-progress sections too
+    showInProgressInput.checked = true;
+    repertoireOnly = false;
+    loadTunes();
+    row = findRow();
+  }
+  if (!row) return;
+  const content = row.closest(".knowledge-content");
+  if (content && content.style.display === "none") content.previousElementSibling.click(); // unfold its section
+  const playButton = share.link != null && row.querySelector(`.inline-link-btn[data-link-index="${share.link}"]`);
+  if (playButton) playButton.click(); else row.click();
+  // The player appears once YouTube's script has loaded
+  let tries = 0;
+  const scrollWhenReady = () => {
+    const playerShown = playButton && !youtubePlayerContainer.classList.contains("hidden");
+    if (playerShown || ++tries > 20) {
+      (playerShown ? youtubePlayerContainer : row).scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    setTimeout(scrollWhenReady, 150);
+  };
+  scrollWhenReady();
+}
+
 guitarBtn.addEventListener("click", function () {
+  setShareHash(null);
   currentMode = "guitar";
   updateModeClass();
   leaveSetsMode();
@@ -328,6 +385,7 @@ guitarBtn.addEventListener("click", function () {
 });
 
 mandolinBtn.addEventListener("click", function () {
+  setShareHash(null);
   currentMode = "mandolin";
   updateModeClass();
   leaveSetsMode();
@@ -1552,6 +1610,7 @@ function createTuneItem(key, tune) {
     }
 
     selectedTuneKey = key;
+    setShareHash(key);
     activeSet = null;
     setEditorButtonState(false);
     destroySetPlayers();
@@ -1610,6 +1669,8 @@ function createTuneItem(key, tune) {
       // Select this tune row
       const row = document.querySelector(`[data-key="${this.dataset.key}"]`);
       if (row) row.click();
+
+      setShareHash(this.dataset.key, Number(this.dataset.linkIndex));
 
       // A video with chord timings: start the piano backing too
       if (autoBackingInput.checked && this.classList.contains("has-timings")) ChordSync.startBacking("piano");
